@@ -22,7 +22,7 @@ from PyQt5.Qt import (QApplication, QDialog, QWidget, QTableWidget, QTableWidget
                       QHBoxLayout, QGridLayout, QPushButton, QFont, QLabel, QCheckBox, QIcon,
                       QLineEdit, QComboBox, QProgressDialog, QTimer, QDialogButtonBox,
                       QScrollArea, QPixmap, Qt, QAbstractItemView, QTextEdit,
-                      pyqtSignal, QGroupBox, QFrame, QTextCursor)
+                      pyqtSignal, QGroupBox, QFrame, QTextCursor, QSpinBox)
 try:
     # qt6 Calibre v6+
     QTextEditNoWrap = QTextEdit.LineWrapMode.NoWrap
@@ -1023,6 +1023,226 @@ class UpdateExistingDialog(SizePersistedDialog):
             'smarten_punctuation':self.prefs['smarten_punctuation'],
             'do_wordcount':self.prefs['do_wordcount'],
             }
+
+class AutoUpdateDialog(SizePersistedDialog):
+    def __init__(self, gui, header, prefs, icon, books,
+                 extraoptions={},
+                 save_size_name='fff:auto update dialog'):
+        SizePersistedDialog.__init__(self, gui, save_size_name)
+
+        self.prefs = prefs
+        self.setWindowTitle(header)
+        self.setWindowIcon(icon)
+
+        layout = QVBoxLayout(self)
+        self.setLayout(layout)
+        title_layout = ImageTitleLayout(self, 'images/icon.png', header)
+        layout.addLayout(title_layout)
+
+        # --- Book list (same as UpdateExistingDialog) ---
+        books_layout = QHBoxLayout()
+        layout.addLayout(books_layout)
+
+        self.books_table = StoryListTableWidget(self)
+        books_layout.addWidget(self.books_table)
+
+        button_layout = QVBoxLayout()
+        books_layout.addLayout(button_layout)
+
+        spacerItem = QtGui.QSpacerItem(20, 40, QtGui.QSizePolicy.Minimum, QtGui.QSizePolicy.Expanding)
+        button_layout.addItem(spacerItem)
+        self.remove_button = QtGui.QToolButton(self)
+        self.remove_button.setToolTip(_('Remove selected books from the list'))
+        self.remove_button.setIcon(get_icon('list_remove.png'))
+        self.remove_button.clicked.connect(self.remove_from_list)
+        button_layout.addWidget(self.remove_button)
+        spacerItem1 = QtGui.QSpacerItem(20, 40, QtGui.QSizePolicy.Minimum, QtGui.QSizePolicy.Expanding)
+        button_layout.addItem(spacerItem1)
+
+        # --- Download options (collapsible, same as UpdateExistingDialog) ---
+        options_outer = QHBoxLayout()
+
+        groupbox = QGroupBox(_("Show Download Options"))
+        groupbox.setCheckable(True)
+        groupbox.setChecked(gprefs.get(show_download_options, False))
+        groupbox.setFlat(True)
+        groupbox.setStyleSheet(gpstyle)
+
+        self.gbf = QFrame()
+        gbl_outer = QVBoxLayout()
+        gbl_outer.addWidget(self.gbf)
+        groupbox.setLayout(gbl_outer)
+        gbl = QVBoxLayout()
+        self.gbf.setLayout(gbl)
+        options_outer.addWidget(groupbox)
+
+        self.gbf.setVisible(gprefs.get(show_download_options, False))
+        groupbox.toggled.connect(self.click_show_download_options)
+
+        horz = QHBoxLayout()
+        gbl.addLayout(horz)
+
+        label = QLabel(_('Output &Format:'))
+        horz.addWidget(label)
+        self.fileform = QComboBox(self)
+        for fmt in ('epub', 'mobi', 'html', 'txt'):
+            self.fileform.addItem(fmt)
+        self.fileform.setCurrentIndex(self.fileform.findText(self.prefs['fileform']))
+        self.fileform.setToolTip(_('Choose output format to create.  May set default from plugin configuration.'))
+        self.fileform.activated.connect(self.set_collisions)
+        label.setBuddy(self.fileform)
+        horz.addWidget(self.fileform)
+
+        label = QLabel(_('Update Mode:'))
+        horz.addWidget(label)
+        self.collision = QComboBox(self)
+        self.collision.setToolTip(_("What sort of update to perform.  May set default from plugin configuration."))
+        self.set_collisions()
+        if 'collision' in extraoptions:
+            use_collision = extraoptions['collision']
+        else:
+            use_collision = save_collisions[self.prefs['collision']]
+        i = self.collision.findText(use_collision)
+        if i > -1:
+            self.collision.setCurrentIndex(i)
+        label.setBuddy(self.collision)
+        horz.addWidget(self.collision)
+
+        horz = QHBoxLayout()
+        gbl.addLayout(horz)
+
+        self.updatemeta = QCheckBox(_('Update Calibre &Metadata?'), self)
+        self.updatemeta.setToolTip(_("Update metadata for existing stories in Calibre from web site?\n(Columns set to 'New Only' in the column tabs will only be set for new books.)"))
+        self.updatemeta.setChecked(self.prefs['updatemeta'])
+        horz.addWidget(self.updatemeta)
+
+        self.bgmeta = QCheckBox(_('Background Metadata?'), self)
+        self.bgmeta.setToolTip(_("Collect Metadata from sites in a Background process.<br />This returns control to you quicker while updating, but you won't be asked for username/passwords or if you are an adult--stories that need those will just fail."))
+        self.bgmeta.setChecked(self.prefs['bgmeta'])
+        horz.addWidget(self.bgmeta)
+
+        layout.addLayout(options_outer)
+
+        # --- Scheduling section ---
+        sched_group = QGroupBox(_("Auto-Update Schedule"))
+        sched_layout = QVBoxLayout()
+        sched_group.setLayout(sched_layout)
+
+        # Initial delay row
+        delay_row = QHBoxLayout()
+        delay_row.addWidget(QLabel(_('Delay first update by:')))
+        self.delay_hours = QSpinBox(self)
+        self.delay_hours.setRange(0, 168)
+        self.delay_hours.setValue(gprefs.get('fff:auto_update_delay_hours', 0))
+        self.delay_hours.setSuffix(' h')
+        delay_row.addWidget(self.delay_hours)
+        self.delay_minutes = QSpinBox(self)
+        self.delay_minutes.setRange(0, 59)
+        self.delay_minutes.setValue(gprefs.get('fff:auto_update_delay_minutes', 5))
+        self.delay_minutes.setSuffix(' m')
+        delay_row.addWidget(self.delay_minutes)
+        delay_row.addStretch()
+        sched_layout.addLayout(delay_row)
+
+        # Update interval row
+        interval_row = QHBoxLayout()
+        interval_row.addWidget(QLabel(_('Update every:')))
+        self.interval_hours = QSpinBox(self)
+        self.interval_hours.setRange(0, 168)
+        self.interval_hours.setValue(gprefs.get('fff:auto_update_interval_hours', 8))
+        self.interval_hours.setSuffix(' h')
+        interval_row.addWidget(self.interval_hours)
+        self.interval_minutes = QSpinBox(self)
+        self.interval_minutes.setRange(0, 59)
+        self.interval_minutes.setValue(gprefs.get('fff:auto_update_interval_minutes', 0))
+        self.interval_minutes.setSuffix(' m')
+        interval_row.addWidget(self.interval_minutes)
+        interval_row.addStretch()
+        sched_layout.addLayout(interval_row)
+
+        # Loop forever checkbox
+        self.loop_forever = QCheckBox(_('Loop forever'), self)
+        self.loop_forever.setToolTip(
+            _('After each update completes, wait the interval above and repeat automatically.'))
+        self.loop_forever.setChecked(gprefs.get('fff:auto_update_loop_forever', False))
+        sched_layout.addWidget(self.loop_forever)
+
+        # Suppress dialogs checkbox
+        self.suppress_dialogs = QCheckBox(_('Suppress dialogs'), self)
+        self.suppress_dialogs.setToolTip(
+            _('Skip the "FanFicFare download complete" confirmation dialog between cycles, enabling fully unattended operation.'))
+        self.suppress_dialogs.setChecked(gprefs.get('fff:auto_update_suppress_dialogs', False))
+        sched_layout.addWidget(self.suppress_dialogs)
+
+        layout.addWidget(sched_group)
+
+        # --- OK / Cancel ---
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+        self.resize_dialog()
+        self.books_table.populate_table(books)
+
+    def accept(self):
+        gprefs['fff:auto_update_delay_hours']      = self.delay_hours.value()
+        gprefs['fff:auto_update_delay_minutes']    = self.delay_minutes.value()
+        gprefs['fff:auto_update_interval_hours']   = self.interval_hours.value()
+        gprefs['fff:auto_update_interval_minutes'] = self.interval_minutes.value()
+        gprefs['fff:auto_update_loop_forever']     = self.loop_forever.isChecked()
+        gprefs['fff:auto_update_suppress_dialogs'] = self.suppress_dialogs.isChecked()
+        SizePersistedDialog.accept(self)
+
+    def click_show_download_options(self, x):
+        self.gbf.setVisible(x)
+        gprefs[show_download_options] = x
+
+    def set_collisions(self):
+        prev = self.collision.currentText()
+        self.collision.clear()
+        order = list(collision_order)
+        order.remove(ADDNEW)
+        order.remove(SKIP)
+        if self.fileform.currentText() != 'epub':
+            order.remove(UPDATE)
+            order.remove(UPDATEALWAYS)
+        if self.prefs['savemetacol'] == '':
+            order.remove(CALIBREONLYSAVECOL)
+        for o in order:
+            self.collision.addItem(o)
+        i = self.collision.findText(prev)
+        if i > -1:
+            self.collision.setCurrentIndex(i)
+
+    def remove_from_list(self):
+        self.books_table.remove_selected_rows()
+
+    def get_books(self):
+        return self.books_table.get_books()
+
+    def get_fff_options(self):
+        return {
+            'fileform':            unicode(self.fileform.currentText()),
+            'collision':           unicode(self.collision.currentText()),
+            'updatemeta':          self.updatemeta.isChecked(),
+            'bgmeta':              self.bgmeta.isChecked(),
+            'smarten_punctuation': self.prefs['smarten_punctuation'],
+            'do_wordcount':        self.prefs['do_wordcount'],
+        }
+
+    def get_auto_options(self):
+        delay_ms = (self.delay_hours.value() * 3600
+                    + self.delay_minutes.value() * 60) * 1000
+        interval_ms = (self.interval_hours.value() * 3600
+                       + self.interval_minutes.value() * 60) * 1000
+        return {
+            'delay_ms':        delay_ms,
+            'interval_ms':     interval_ms,
+            'loop_forever':    self.loop_forever.isChecked(),
+            'suppress_dialogs': self.suppress_dialogs.isChecked(),
+        }
+
 
 class StoryListTableWidget(QTableWidget):
 
