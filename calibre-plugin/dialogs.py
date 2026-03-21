@@ -801,7 +801,7 @@ class _LoopProgressDialog(QProgressDialog):
     def do_when_finished(self):
         self.hide()
 
-def time_duration_format(seconds):
+def time_duration_format(seconds, joiner=', '):
     """
     Convert seconds into a string describing the duration in larger time units (seconds, minutes, hours, days)
     Only returns the two largest time divisions (eg, will drop seconds if there's hours remaining)
@@ -830,7 +830,7 @@ def time_duration_format(seconds):
     if len(strings) == 0:
         return _('less than 1 second')
     else:
-        return ', '.join(strings)
+        return joiner.join(strings)
 
 class AboutDialog(QDialog):
 

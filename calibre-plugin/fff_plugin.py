@@ -111,7 +111,7 @@ from calibre_plugins.fanficfare_plugin.dialogs import (
     LoopProgressDialog, UserPassDialog, AboutDialog, CollectURLDialog,
     RejectListDialog, EmailPassDialog, TOTPDialog,
     save_collisions, question_dialog_all,
-    NotGoingToDownload, RejectUrlEntry, IniTextDialog)
+    NotGoingToDownload, RejectUrlEntry, IniTextDialog, time_duration_format)
 
 # because calibre immediately transforms html into zip and don't want
 # to have an 'if html'.  db.has_format is cool with the case mismatch,
@@ -196,10 +196,12 @@ class FanFicFarePlugin(InterfaceAction):
         self.imap_pass = None
         self.download_job_manager = DownloadJobManager()
 
-        self._auto_update_timer     = None   # QTimer or None; None = idle
-        self._auto_update_id_list   = None   # list[int] calibre book ids
-        self._auto_update_options   = None   # fff options dict
-        self._auto_update_auto_opts = None   # {delay_ms, interval_ms, loop_forever, suppress_dialogs}
+        self._auto_update_timer       = None   # QTimer or None; None = idle
+        self._auto_update_id_list     = None   # list[int] calibre book ids
+        self._auto_update_options     = None   # fff options dict
+        self._auto_update_auto_opts    = None   # {delay_ms, interval_ms, loop_forever, suppress_dialogs}
+        self._auto_update_last_summary = None  # plain-text result summary for suppress_dialogs mode
+        self._auto_update_htmllog      = None  # HTML log from last suppress_dialogs cycle
 
     def initialization_complete(self):
         # otherwise configured hot keys won't work until the menu's
@@ -1055,7 +1057,7 @@ class FanFicFarePlugin(InterfaceAction):
     def prep_anthology_downloads(self, options, update_books,
                                  merge=False, urlmapfile=None):
         # new question_cache each time we start prep'ing downloads.
-        self.question_cache = {}
+        self._reset_question_cache()
         if isinstance(update_books, string_types):
             url_list = split_text_to_urls(update_books)
             update_books = self.convert_urls_to_books(url_list)
@@ -1218,6 +1220,7 @@ class FanFicFarePlugin(InterfaceAction):
             self.stop_auto_update()
             return
 
+        self._auto_update_last_summary = None  # reset before each cycle
         id_list = self._auto_update_id_list
         books = [self.make_book_id_only(x) for x in id_list]
         for j, book in enumerate(books):
@@ -1254,15 +1257,24 @@ class FanFicFarePlugin(InterfaceAction):
             return
 
         interval_ms = auto_opts.get('interval_ms', 0)
+        htmllog = self._auto_update_htmllog
         if interval_ms > 0:
             self._auto_update_timer = QTimer(self.gui)
             self._auto_update_timer.setSingleShot(True)
             self._auto_update_timer.timeout.connect(self._run_auto_update_cycle)
             self._auto_update_timer.start(interval_ms)
-            self.do_status_message(
-                _('Auto-Update: next cycle in %d minute(s).') % max(1, interval_ms // 60000), 5000)
+            summary = self._auto_update_last_summary
+            next_cycle_msg = _('Auto-Update: next cycle in %s.') % time_duration_format(interval_ms // 1000, joiner=' and ')
+            msg = ('Update finished: %s — %s' % (summary, next_cycle_msg)) if summary else next_cycle_msg
+            self.do_status_message(msg, 8000)
         else:
+            if self._auto_update_last_summary:
+                self.do_status_message(_('Update finished: %s') % self._auto_update_last_summary, 5000)
             self._run_auto_update_cycle()
+        if htmllog:
+            d = ViewLog(_('FanFicFare log'), htmllog, parent=self.gui)
+            d.setWindowIcon(get_icon('bookmarks.png'))
+            d.show()
 
     def stop_auto_update(self):
         '''Cancel any pending auto-update timer and clean up state.'''
@@ -1277,10 +1289,12 @@ class FanFicFarePlugin(InterfaceAction):
             self.do_status_message(_('Auto-Update stopped.'), 3000)
 
     def _clear_auto_update_state(self):
-        self._auto_update_timer     = None
-        self._auto_update_id_list   = None
-        self._auto_update_options   = None
-        self._auto_update_auto_opts = None
+        self._auto_update_timer        = None
+        self._auto_update_id_list      = None
+        self._auto_update_options      = None
+        self._auto_update_auto_opts    = None
+        self._auto_update_last_summary = None
+        self._auto_update_htmllog      = None
 
     ## ----------------------------------------------------------------
 
@@ -1306,10 +1320,17 @@ class FanFicFarePlugin(InterfaceAction):
         logger.debug(retval)
         return retval
 
+    def _reset_question_cache(self):
+        self.question_cache = {}
+        if (self._auto_update_auto_opts or {}).get('suppress_dialogs', False):
+            # Suppressed auto-update runs should behave like a silent "Yes to All"
+            # for adult confirmation prompts.
+            self.question_cache['is_adult'] = True
+
     def prep_downloads(self, options, books, merge=False, extrapayload=None):
         '''Fetch metadata for stories from servers, launch BG job when done.'''
         # new question_cache each time we start prep'ing downloads.
-        self.question_cache = {}
+        self._reset_question_cache()
         if isinstance(books, string_types):
             url_list = split_text_to_urls(books)
             books = self.convert_urls_to_books(url_list)
@@ -2000,7 +2021,10 @@ class FanFicFarePlugin(InterfaceAction):
         job.reconsolidate=prefs['reconsolidate_jobs']  # YYY batch update
 
         self.gui.jobs_pointer.start()
-        self.do_status_message(_('Starting %d FanFicFare Downloads')%len(book_list),3000)
+        if site:
+            self.do_status_message(_('Starting %d downloads from %s') % (len(book_list), site), 3000)
+        else:
+            self.do_status_message(_('Starting %d downloads') % len(book_list), 3000)
 
     def do_mark_series_anthologies(self,mark_anthology_ids):
         if prefs['mark_series_anthologies'] and mark_anthology_ids:
@@ -2311,6 +2335,29 @@ class FanFicFarePlugin(InterfaceAction):
     def do_proceed_question(self, update_func, payload, htmllog, msgl):
         if (self._auto_update_auto_opts or {}).get('suppress_dialogs', False):
             update_func(payload)
+            self._auto_update_htmllog = htmllog
+            # Build a plain-text result summary from good_list / bad_list
+            if isinstance(payload, tuple) and len(payload) >= 2:
+                from collections import Counter
+                status_display = {
+                    _('Add'):      _('Added'),
+                    _('Update'):   _('Updated'),
+                    _('Meta'):     _('Metadata updates'),
+                    _('Rejected'): _('User Rejected'),
+                }
+                def _display(s):
+                    return status_display.get(s, s)
+                good_list, bad_list = payload[0], payload[1]
+                parts = []
+                if good_list:
+                    counts = Counter(_display(b.get('status','')) for b in good_list)
+                    detail = ', '.join('%d %s' % (n, s) for s, n in sorted(counts.items()))
+                    parts.append(_('%d updated (%s)') % (len(good_list), detail))
+                if bad_list:
+                    counts = Counter(_display(b.get('status','')) for b in bad_list)
+                    detail = ', '.join('%d %s' % (n, s) for s, n in sorted(counts.items()))
+                    parts.append(_('%d failed (%s)') % (len(bad_list), detail))
+                self._auto_update_last_summary = '; '.join(parts) if parts else _('No changes')
             self.download_finished_signal.emit()
             return
 
