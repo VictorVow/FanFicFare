@@ -196,6 +196,9 @@ default_prefs['imapmarkread'] = True
 default_prefs['auto_reject_from_email'] = False
 default_prefs['update_existing_only_from_email'] = False
 default_prefs['download_from_email_immediately'] = False
+default_prefs['apprise_enabled'] = False
+default_prefs['apprise_urls'] = ''
+default_prefs['apprise_notify_on_no_changes'] = False
 
 
 #default_prefs['single_proc_jobs'] = True # setting and code removed

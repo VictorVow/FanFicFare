@@ -10,7 +10,9 @@ __docformat__ = 'restructuredtext en'
 import logging
 logger = logging.getLogger(__name__)
 
+import os
 import re
+import tempfile
 import threading
 from collections import OrderedDict
 
@@ -18,7 +20,7 @@ from PyQt5 import QtWidgets as QtGui
 from PyQt5.Qt import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
                       QLineEdit, QComboBox, QCheckBox, QPushButton, QTabWidget,
                       QScrollArea, QGroupBox, QButtonGroup, QRadioButton,
-                      Qt)
+                      QPlainTextEdit, QMessageBox, Qt)
 
 from calibre.gui2 import dynamic, info_dialog
 from calibre.gui2.complete2 import EditWithComplete
@@ -267,6 +269,9 @@ class ConfigWidget(QWidget):
         self.imap_tab = ImapTab(self, plugin_action)
         tab_widget.addTab(self.imap_tab, _('Email Settings'))
 
+        self.apprise_tab = AppriseTab(self, plugin_action)
+        tab_widget.addTab(self.apprise_tab, _('Notifications'))
+
         self.other_tab = OtherTab(self, plugin_action)
         tab_widget.addTab(self.other_tab, _('Other'))
 
@@ -416,6 +421,10 @@ class ConfigWidget(QWidget):
             prefs['auto_reject_from_email'] = self.imap_tab.auto_reject_from_email.isChecked()
             prefs['update_existing_only_from_email'] = self.imap_tab.update_existing_only_from_email.isChecked()
             prefs['download_from_email_immediately'] = self.imap_tab.download_from_email_immediately.isChecked()
+
+            prefs['apprise_enabled'] = self.apprise_tab.apprise_enabled.isChecked()
+            prefs['apprise_notify_on_no_changes'] = self.apprise_tab.apprise_notify_on_no_changes.isChecked()
+            prefs['apprise_urls'] = unicode(self.apprise_tab.apprise_urls.toPlainText()).strip()
 
             prefs['site_split_jobs'] = self.other_tab.site_split_jobs.isChecked()
             prefs['reconsolidate_jobs'] = self.other_tab.reconsolidate_jobs.isChecked()
@@ -1770,3 +1779,114 @@ class ImapTab(QWidget):
         self.l.addWidget(label,row,0,1,-1,Qt.AlignTop)
         self.l.setRowStretch(row,1)
         row+=1
+
+class AppriseTab(QWidget):
+
+    def __init__(self, parent_dialog, plugin_action):
+        self.parent_dialog = parent_dialog
+        self.plugin_action = plugin_action
+        QWidget.__init__(self)
+
+        self.l = QGridLayout()
+        self.setLayout(self.l)
+        row=0
+
+        label = QLabel(_('These settings control Apprise push notifications. Notifications are only sent when automated updates run with dialogs suppressed.'))
+        label.setWordWrap(True)
+        self.l.addWidget(label,row,0,1,-1)
+        row+=1
+
+        self.apprise_enabled = QCheckBox(_('Enable Apprise Notifications'),self)
+        self.apprise_enabled.setChecked(prefs['apprise_enabled'])
+        self.l.addWidget(self.apprise_enabled,row,0,1,-1)
+        row+=1
+
+        self.apprise_notify_on_no_changes = QCheckBox(_('Notify When No Changes Are Found'),self)
+        self.apprise_notify_on_no_changes.setChecked(prefs['apprise_notify_on_no_changes'])
+        self.l.addWidget(self.apprise_notify_on_no_changes,row,0,1,-1)
+        row+=1
+
+        label = QLabel(_('Notification URLs (one per line)'))
+        self.l.addWidget(label,row,0,1,-1)
+        row+=1
+
+        self.apprise_urls = QPlainTextEdit(self)
+        self.apprise_urls.setPlainText(prefs['apprise_urls'])
+        self.l.addWidget(self.apprise_urls,row,0,1,-1)
+        row+=1
+
+        label = QLabel(
+            '<a href="https://github.com/caronc/apprise/wiki">'
+            + _('Apprise URL format help')
+            + '</a><br/>'
+            + 'tgram://BotToken/ChatID<br/>'
+            + 'discord://WebhookID/WebhookToken<br/>'
+            + 'gotify://hostname/token')
+        label.setOpenExternalLinks(True)
+        label.setWordWrap(True)
+        self.l.addWidget(label,row,0,1,-1)
+        row+=1
+
+        self.test_button = QPushButton(_('Send Test Notification'), self)
+        self.test_button.clicked.connect(self._send_test_notification)
+        self.l.addWidget(self.test_button,row,0,1,-1)
+        row+=1
+
+        self.l.setRowStretch(row,1)
+
+    def _send_test_notification(self):
+        urls = [unicode(line).strip() for line in unicode(self.apprise_urls.toPlainText()).splitlines() if unicode(line).strip()]
+        if not urls:
+            QMessageBox.warning(self, _('Apprise Notifications'), _('Enter at least one Apprise notification URL.'))
+            return
+
+        cert_path = None
+        old_requests_ca_bundle = os.environ.get('REQUESTS_CA_BUNDLE')
+        old_curl_ca_bundle = os.environ.get('CURL_CA_BUNDLE')
+        try:
+            with self.plugin_action.interface_action_base_plugin:
+                cert_data = get_resources('certifi/cacert.pem')
+                if cert_data:
+                    fd, cert_path = tempfile.mkstemp(prefix='fff_apprise_', suffix='.pem')
+                    with os.fdopen(fd, 'wb') as cert_file:
+                        cert_file.write(cert_data)
+                    os.environ['REQUESTS_CA_BUNDLE'] = cert_path
+                    os.environ['CURL_CA_BUNDLE'] = cert_path
+                import apprise
+                from apprise.logger import LogCapture
+                import logging as pylogging
+                apobj = apprise.Apprise()
+                with LogCapture(level=pylogging.DEBUG) as logs:
+                    add_result = True
+                    for url in urls:
+                        add_result = apobj.add(url) and add_result
+                    result = add_result and apobj.notify(
+                        title='FanFicFare Test Notification',
+                        body='This is a test notification from FanFicFare.')
+                    details = unicode(logs.getvalue()).strip()
+        except Exception as e:
+            QMessageBox.critical(self,
+                                 _('Apprise Notifications'),
+                                 _('Failed to send test notification: %s') % unicode(e))
+            return
+        finally:
+            if old_requests_ca_bundle is None:
+                os.environ.pop('REQUESTS_CA_BUNDLE', None)
+            else:
+                os.environ['REQUESTS_CA_BUNDLE'] = old_requests_ca_bundle
+            if old_curl_ca_bundle is None:
+                os.environ.pop('CURL_CA_BUNDLE', None)
+            else:
+                os.environ['CURL_CA_BUNDLE'] = old_curl_ca_bundle
+            if cert_path and os.path.exists(cert_path):
+                os.unlink(cert_path)
+
+        if result:
+            QMessageBox.information(self,
+                                    _('Apprise Notifications'),
+                                    _('Test notification sent.'))
+        else:
+            QMessageBox.warning(self,
+                                _('Apprise Notifications'),
+                                (_('Apprise did not report success sending the test notification.')
+                                 + ('\n\n' + details if details else '')))

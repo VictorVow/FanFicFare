@@ -7,7 +7,7 @@ __license__   = 'GPL v3'
 __copyright__ = '2019, Jim Miller'
 __docformat__ = 'restructuredtext en'
 
-import sys, os
+import sys, os, atexit, tempfile
 if sys.version_info >= (2, 7):
     import logging
     logger = logging.getLogger(__name__)
@@ -34,6 +34,51 @@ from calibre.customize import InterfaceActionBase
 
 # pulled out from FanFicFareBase for saving in prefs.py
 __version__ = (4, 55, 2)
+_PLUGIN_CA_BUNDLE = None
+
+def ensure_plugin_ca_bundle():
+    global _PLUGIN_CA_BUNDLE
+
+    if _PLUGIN_CA_BUNDLE and os.path.exists(_PLUGIN_CA_BUNDLE):
+        path = _PLUGIN_CA_BUNDLE
+    else:
+        cert_data = get_resources('certifi/cacert.pem')
+        if not cert_data:
+            return None
+        fd, path = tempfile.mkstemp(prefix='fff_ca_bundle_', suffix='.pem')
+        with os.fdopen(fd, 'wb') as cert_file:
+            cert_file.write(cert_data)
+        _PLUGIN_CA_BUNDLE = path
+        atexit.register(lambda: os.path.exists(path) and os.unlink(path))
+
+    os.environ['REQUESTS_CA_BUNDLE'] = path
+    os.environ['CURL_CA_BUNDLE'] = path
+
+    try:
+        import certifi
+        certifi.where = lambda: path
+    except Exception:
+        pass
+
+    try:
+        import requests.adapters
+        requests.adapters.DEFAULT_CA_BUNDLE_PATH = path
+    except Exception:
+        pass
+
+    try:
+        import requests.certs
+        requests.certs.where = lambda: path
+    except Exception:
+        pass
+
+    try:
+        import requests.utils
+        requests.utils.DEFAULT_CA_BUNDLE_PATH = path
+    except Exception:
+        pass
+
+    return path
 
 ## Apparently the name for this class doesn't matter--it was still
 ## 'demo' for the first few versions.
@@ -107,6 +152,7 @@ class FanFicFareBase(InterfaceActionBase):
     def load_actual_plugin(self, gui):
         # so the sys.path was modified while loading the plug impl.
         with self:
+            ensure_plugin_ca_bundle()
 
             # Make sure the fanficfare module is available globally
             # under its simple name, -- This is the only reason other
@@ -123,6 +169,7 @@ class FanFicFareBase(InterfaceActionBase):
     def cli_main(self,argv):
 
         with self: # so the sys.path was modified appropriately
+            ensure_plugin_ca_bundle()
             # I believe there's no performance hit loading these here when
             # CLI--it would load everytime anyway.
             from calibre.library import db

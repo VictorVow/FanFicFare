@@ -1271,7 +1271,7 @@ class FanFicFarePlugin(InterfaceAction):
             if self._auto_update_last_summary:
                 self.do_status_message(_('Update finished: %s') % self._auto_update_last_summary, 5000)
             self._run_auto_update_cycle()
-        if htmllog:
+        if htmllog and not prefs['apprise_enabled']:
             d = ViewLog(_('FanFicFare log'), htmllog, parent=self.gui)
             d.setWindowIcon(get_icon('bookmarks.png'))
             d.show()
@@ -2332,6 +2332,136 @@ class FanFicFarePlugin(InterfaceAction):
             ## but they also don't need the processEvents() call
             pass
 
+    def _send_apprise_notification(self, title, body):
+        if not prefs['apprise_enabled']:
+            return
+
+        urls_text = prefs['apprise_urls']
+        if not urls_text:
+            return
+
+        cert_path = None
+        old_requests_ca_bundle = os.environ.get('REQUESTS_CA_BUNDLE')
+        old_curl_ca_bundle = os.environ.get('CURL_CA_BUNDLE')
+        try:
+            with self.interface_action_base_plugin:
+                cert_data = get_resources('certifi/cacert.pem')
+                if cert_data:
+                    with PersistentTemporaryFile(suffix='_fff_apprise.pem') as cert_file:
+                        cert_file.write(cert_data)
+                        cert_file.flush()
+                        cert_path = cert_file.name
+                        os.environ['REQUESTS_CA_BUNDLE'] = cert_path
+                        os.environ['CURL_CA_BUNDLE'] = cert_path
+                        import apprise
+                        from apprise.logger import LogCapture
+                        import logging as pylogging
+
+                        apobj = apprise.Apprise()
+                        with LogCapture(level=pylogging.DEBUG) as logs:
+                            add_result = True
+                            for url in urls_text.splitlines():
+                                url = unicode(url).strip()
+                                if url:
+                                    add_result = apobj.add(url) and add_result
+                            result = add_result and apobj.notify(title=title, body=body)
+                            details = unicode(logs.getvalue()).strip()
+                    if not result:
+                        logger.debug("Apprise notification did not report success.%s%s",
+                                     "\n" if details else "",
+                                     details)
+                    return
+
+                import apprise
+                from apprise.logger import LogCapture
+                import logging as pylogging
+
+                apobj = apprise.Apprise()
+                with LogCapture(level=pylogging.DEBUG) as logs:
+                    add_result = True
+                    for url in urls_text.splitlines():
+                        url = unicode(url).strip()
+                        if url:
+                            add_result = apobj.add(url) and add_result
+                    result = add_result and apobj.notify(title=title, body=body)
+                    details = unicode(logs.getvalue()).strip()
+                if not result:
+                    logger.debug("Apprise notification did not report success.%s%s",
+                                 "\n" if details else "",
+                                 details)
+        except Exception:
+            logger.debug("Failed to send Apprise notification", exc_info=True)
+        finally:
+            if old_requests_ca_bundle is None:
+                os.environ.pop('REQUESTS_CA_BUNDLE', None)
+            else:
+                os.environ['REQUESTS_CA_BUNDLE'] = old_requests_ca_bundle
+            if old_curl_ca_bundle is None:
+                os.environ.pop('CURL_CA_BUNDLE', None)
+            else:
+                os.environ['CURL_CA_BUNDLE'] = old_curl_ca_bundle
+
+    def _format_apprise_body(self, good_list, bad_list):
+        groups = []
+
+        def get_subgroup(status, comment):
+            if status == _('Skipped'):
+                if comment.startswith(_('Already contains ')):
+                    return _('Already contains all chapters')
+                if _('web site only has') in comment:
+                    return _('Web site has less chapters')
+            return None
+
+        def get_status_group(status):
+            header = '[%s]' % status
+            for entry in groups:
+                if entry['header'] == header:
+                    return entry
+            entry = {'header': header, 'subgroups': []}
+            groups.append(entry)
+            return entry
+
+        def add_line(status, subgroup, line):
+            status_group = get_status_group(status)
+            for entry in status_group['subgroups']:
+                if entry['subgroup'] == subgroup:
+                    entry['lines'].append(line)
+                    return
+            status_group['subgroups'].append({'subgroup': subgroup, 'lines': [line]})
+
+        for book in list(good_list) + list(bad_list):
+            status = unicode(book.get('status', '')).strip()
+            title = escapehtml(unicode(book.get('title', '')).strip())
+            raw_comment = unicode(book.get('comment', '')).strip()
+            comment = escapehtml(raw_comment)
+            line = '[%s] %s' % (escapehtml(status), title)
+            if comment:
+                line += ' - %s' % comment
+            add_line(status, get_subgroup(status, raw_comment), line)
+
+        if not groups:
+            return _('No changes.')
+
+        sections = []
+        for index, group in enumerate(groups):
+            if index:
+                sections.append('')
+            sections.append('<b>%s</b>' % escapehtml(group['header']))
+            for subgroup in group['subgroups']:
+                if subgroup['subgroup']:
+                    sections.append('<b>%s</b> - %s' % (
+                        escapehtml(group['header']),
+                        escapehtml(subgroup['subgroup'])))
+                sections.extend(subgroup['lines'])
+                sections.append('')
+
+        body = '\n'.join(sections).strip()
+        limit = 4000
+        if len(body) > limit:
+            continuation = _('\n... truncated')
+            body = body[:limit - len(continuation)].rstrip() + continuation
+        return body
+
     def do_proceed_question(self, update_func, payload, htmllog, msgl):
         if (self._auto_update_auto_opts or {}).get('suppress_dialogs', False):
             update_func(payload)
@@ -2358,6 +2488,11 @@ class FanFicFarePlugin(InterfaceAction):
                     detail = ', '.join('%d %s' % (n, s) for s, n in sorted(counts.items()))
                     parts.append(_('%d failed (%s)') % (len(bad_list), detail))
                 self._auto_update_last_summary = '; '.join(parts) if parts else _('No changes')
+                if (self._auto_update_last_summary != _('No changes')
+                        or prefs['apprise_notify_on_no_changes']):
+                    notif_title = 'FanFicFare: ' + self._auto_update_last_summary
+                    notif_body = self._format_apprise_body(good_list, bad_list)
+                    self._send_apprise_notification(notif_title, notif_body)
             self.download_finished_signal.emit()
             return
 
