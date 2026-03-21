@@ -110,7 +110,7 @@ class BaseSiteAdapter(Requestable):
     def reset_story(self,url=None):
         self.story = Story(self.get_configuration())
         self.story.setMetadata('site',self.getConfigSection())
-        self.story.setMetadata('dateCreated',datetime.now())
+        self.story.setMetadata('datePackaged',datetime.now())
 
         ## Save class inheritence list in metadata.  Must be added to
         ## extra_valid_entries to use.
@@ -674,10 +674,7 @@ try to download.</p>
             self.story.clear_processed_metadata_cache()
 
             if not self.story.getMetadataRaw('dateUpdated'):
-                if self.story.getMetadataRaw('datePublished'):
-                    self.story.setMetadata('dateUpdated',self.story.getMetadataRaw('datePublished'))
-                else:
-                    self.story.setMetadata('dateUpdated',self.story.getMetadataRaw('dateCreated'))
+                self.story.setMetadata('dateUpdated',self.story.getMetadataRaw('datePackaged'))
 
             self.metadataDone = True
             # normalize chapter urls.
@@ -698,10 +695,7 @@ try to download.</p>
             self.story.load_html_metadata(metahtml)
             self.metadataDone = True
             if not self.story.getMetadataRaw('dateUpdated'):
-                if self.story.getMetadataRaw('datePublished'):
-                    self.story.setMetadata('dateUpdated',self.story.getMetadataRaw('datePublished'))
-                else:
-                    self.story.setMetadata('dateUpdated',self.story.getMetadataRaw('dateCreated'))
+                self.story.setMetadata('dateUpdated',self.story.getMetadataRaw('datePackaged'))
 
     def hookForUpdates(self,chaptercount):
         "Usually not needed."
