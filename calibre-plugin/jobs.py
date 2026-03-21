@@ -40,7 +40,7 @@ def do_download_worker_single(site,
     from calibre.debug import print_basic_debug_info
     print_basic_debug_info(sys.stderr)
 
-    notification(0.01, _('Downloading FanFiction Stories'))
+    notification(0.01, _('Downloading FanFiction Stories from %s') % site if site else _('Downloading FanFiction Stories'))
     from calibre_plugins.fanficfare_plugin import FanFicFareBase
     fffbase = FanFicFareBase(options['plugin_path'])
     with fffbase: # so the sys.path was modified while loading the
