@@ -130,6 +130,7 @@ def do_download_for_worker(book,options,merge,notification=lambda x,y:x):
     fffbase = FanFicFareBase(options['plugin_path'])
     with fffbase: # so the sys.path was modified while loading the
                   # plug impl.
+        from calibre_plugins.fanficfare_plugin import ensure_plugin_ca_bundle
         from calibre_plugins.fanficfare_plugin.prefs import (
                 SAVE_YES, SAVE_YES_UNLESS_SITE, OVERWRITE, OVERWRITEALWAYS, UPDATE,
                 UPDATEALWAYS, ADDNEW, SKIP, CALIBREONLY, CALIBREONLYSAVECOL)
@@ -139,6 +140,8 @@ def do_download_for_worker(book,options,merge,notification=lambda x,y:x):
         from fanficfare.exceptions import NotGoingToDownload
         
         from calibre_plugins.fanficfare_plugin.fff_util import get_fff_config
+
+        ensure_plugin_ca_bundle()
 
         try:
             logger.info("\n\n" + ("-"*80) + " " + book['url'])

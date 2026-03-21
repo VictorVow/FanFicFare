@@ -22,7 +22,7 @@ from makezip import createZipFile
 
 if __name__=="__main__":
     filename="FanFicFare.zip"
-    exclude=['*.pyc','*~','*.xcf','*[0-9].png','*.po','*.pot','*default.mo','*Thumbs.db']
+    exclude=['*.pyc','*~','*.xcf','*[0-9].png','*.po','*.pot','*default.mo','*Thumbs.db','*.dist-info']
     
     os.chdir('calibre-plugin')
     files=['plugin-defaults.ini','plugin-example.ini','about.html',
@@ -44,7 +44,16 @@ if __name__=="__main__":
         'certifi',
         'idna',
         'brotlidecpy', # still needed for cal5.
+        'apprise',
+        'requests_oauthlib',
+        'oauthlib',
+        'markdown',
+        'yaml',
+        '_yaml',
+        'click',
+        'charset_normalizer',
         ]
+    files.extend(glob('*.so'))
     createZipFile("../"+filename,"a",
                   files,
                   exclude=exclude)
@@ -55,4 +64,3 @@ if __name__=="__main__":
     createZipFile(filename,"a",
                   files,
                   exclude=exclude)
-
