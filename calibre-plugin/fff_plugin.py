@@ -1653,8 +1653,8 @@ class FanFicFarePlugin(InterfaceAction):
                 book['pubdate'] = story.getMetadataRaw('datePublished').replace(tzinfo=local_tz)
             if story.getMetadataRaw('dateUpdated'):
                 book['updatedate'] = story.getMetadataRaw('dateUpdated').replace(tzinfo=local_tz)
-            if story.getMetadataRaw('dateCreated'):
-                book['timestamp'] = story.getMetadataRaw('dateCreated').replace(tzinfo=local_tz)
+            if story.getMetadataRaw('datePackaged'):
+                book['timestamp'] = story.getMetadataRaw('datePackaged').replace(tzinfo=local_tz)
             else:
                 book['timestamp'] = datetime.now().replace(tzinfo=local_tz) # need *something* there for calibre.
 
@@ -2599,6 +2599,13 @@ class FanFicFarePlugin(InterfaceAction):
         except Exception as e:
             raise_exception(meta,val,label,e)
 
+    def _get_raw_custom_date_value(self, book, meta):
+        return {
+            'datePublished': book.get('pubdate'),
+            'dateUpdated': book.get('updatedate'),
+            'datePackaged': book.get('timestamp'),
+        }.get(meta)
+
     def update_metadata(self, db, book_id, book, mi, options):
         oldmi = db.get_metadata(book_id,index_is_id=True)
         if prefs['keeptags']:
@@ -2692,7 +2699,13 @@ class FanFicFarePlugin(InterfaceAction):
                 continue
             label = coldef['label']
             if coldef['datatype'] in ('enumeration','comments','datetime','series'):
-                self.set_custom(db, book_id, meta, book['all_metadata'][meta], label, commit=False)
+                val = book['all_metadata'][meta]
+                if coldef['datatype'] == 'datetime':
+                    val = self._get_raw_custom_date_value(book, meta)
+                    if not val:
+                        logger.debug("No raw datetime value for %s, skipping custom column(%s) update."%(meta,coldef['name']))
+                        continue
+                self.set_custom(db, book_id, meta, val, label, commit=False)
             elif coldef['datatype'] == 'text':
                 joined_val = book['all_metadata'][meta]
                 # 'Contains names' custom columns need & separators.
@@ -2771,6 +2784,8 @@ class FanFicFarePlugin(InterfaceAction):
                                         val = sum(items)
                             else:
                                 val = unicode(val).replace(",","")
+                        elif coldef['datatype'] == 'datetime':
+                            val = self._get_raw_custom_date_value(book, meta)
                         else:
                             val = val
                         if coldef['datatype'] == 'bool':
@@ -2781,7 +2796,7 @@ class FanFicFarePlugin(InterfaceAction):
                             else:
                                 val = None # for tri-state 'booleans'. Yes/No/Null
                         # logger.debug("setting 'r' or 'added':meta:%s label:%s val:%s"%(meta,label,val))
-                        if val != '':
+                        if val not in ('', None):
                             self.set_custom(db, book_id, meta, val, label=label, commit=False)
 
                     if flag == 'a':
@@ -3283,7 +3298,7 @@ The previously downloaded book is still in the anthology, but FFF doesn't have t
                 # timestamp should be latest date.
                 if k == 'timestamp' and book[k] <= b[k]:
                     book[k]=b[k]
-                    book['all_metadata']['dateCreated'] = b['all_metadata']['dateCreated']
+                    book['all_metadata']['datePackaged'] = b['all_metadata']['datePackaged']
                 # updated should be latest date.
                 if k == 'updatedate' and book[k] <= b[k]:
                     book[k]=b[k]
@@ -3300,7 +3315,7 @@ The previously downloaded book is still in the anthology, but FFF doesn't have t
                             else:
                                 # lot of work for a simple add.
                                 book['all_metadata'][k] = unicode(int(book['all_metadata'][k].replace(',',''))+int(b['all_metadata'][k].replace(',','')))
-                    elif k in ('dateUpdated','datePublished','dateCreated',
+                    elif k in ('dateUpdated','datePublished','datePackaged',
                                'series','status','title'):
                         pass # handled above, below or skip these for now, not going to do anything with them.
                     elif k not in book['all_metadata'] or not book['all_metadata'][k]:
