@@ -217,6 +217,8 @@ def do_download_for_worker(book,options,merge,notification=lambda x,y:x):
                 book['pubdate'] = story.getMetadataRaw('datePublished').replace(tzinfo=local_tz)
             if story.getMetadataRaw('dateUpdated'):
                 book['updatedate'] = story.getMetadataRaw('dateUpdated').replace(tzinfo=local_tz)
+            elif story.getMetadataRaw('datePackaged'):
+                book['updatedate'] = story.getMetadataRaw('datePackaged').replace(tzinfo=local_tz)
             if story.getMetadataRaw('datePackaged'):
                 book['timestamp'] = story.getMetadataRaw('datePackaged').replace(tzinfo=local_tz)
             else:
