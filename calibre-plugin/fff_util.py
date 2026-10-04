@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 from fanficfare import adapters
 from fanficfare.configurable import Configuration
-from calibre_plugins.fanficfare_plugin.prefs import prefs
+from calibre_plugins.automatedfanficfare_plugin.prefs import prefs
 from fanficfare.six import ensure_text
 from fanficfare.six.moves import configparser
 from fanficfare.six.moves import collections_abc

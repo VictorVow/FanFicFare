@@ -11,10 +11,10 @@ __docformat__ = 'restructuredtext en'
 
 from calibre_plugins.action_chains.events import ChainEvent
 
-class FanFicFareDownloadFinished(ChainEvent):
+class AutomatedFanFicFareDownloadFinished(ChainEvent):
 
     # replace with the name of your event
-    name = 'FanFicFare Download Finished'
+    name = 'AutomatedFanFicFare Download Finished'
 
     def get_event_signal(self):
-        return self.gui.iactions['FanFicFare'].download_finished_signal
+        return self.gui.iactions['AutomatedFanFicFare'].download_finished_signal

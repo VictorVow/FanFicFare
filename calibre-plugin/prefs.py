@@ -20,8 +20,8 @@ try:
 except NameError:
     pass # load_translations() added in calibre 1.9
 
-from calibre_plugins.fanficfare_plugin import __version__ as plugin_version
-from calibre_plugins.fanficfare_plugin.common_utils import get_library_uuid
+from calibre_plugins.automatedfanficfare_plugin import __version__ as plugin_version
+from calibre_plugins.automatedfanficfare_plugin.common_utils import get_library_uuid
 
 SKIP=_('Skip')
 ADDNEW=_('Add New Book')
@@ -80,7 +80,7 @@ YES=_('Yes, Always')
 SAVE_YES='Yes'
 YES_IF_IMG=_('Yes, if EPUB has a cover image')
 SAVE_YES_IF_IMG='Yes, if img'
-YES_UNLESS_IMG=_('Yes, unless FanFicFare found a cover image')
+YES_UNLESS_IMG=_('Yes, unless AutomatedFanFicFare found a cover image')
 SAVE_YES_UNLESS_IMG='Yes, unless img'
 YES_UNLESS_SITE=_('Yes, unless found on site')
 SAVE_YES_UNLESS_SITE='Yes, unless site'
@@ -102,7 +102,7 @@ updatecalcover_order=[YES,YES_IF_IMG,NO]
 gencalcover_order=[YES,YES_UNLESS_IMG,NO]
 do_wordcount_order=[YES,YES_UNLESS_SITE,NO]
 
-PREFS_NAMESPACE = 'FanFicFarePlugin'
+PREFS_NAMESPACE = 'AutomatedFanFicFarePlugin'
 PREFS_KEY_SETTINGS = 'settings'
 
 # Set defaults used by all.  Library specific settings continue to

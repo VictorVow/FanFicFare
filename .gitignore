@@ -28,6 +28,7 @@ FanFictionDownLoader.zip
 *.epub
 *Thumbs.db
 FanFicFare.zip
+AutomatedFanFicFare.zip
 output
 build
 dist

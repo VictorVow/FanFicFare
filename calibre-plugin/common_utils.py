@@ -285,7 +285,7 @@ class KeyboardConfigDialog(SizePersistedDialog):
     This dialog is used to allow editing of keyboard shortcuts.
     '''
     def __init__(self, gui, group_name):
-        SizePersistedDialog.__init__(self, gui, 'FanFicFare plugin:Keyboard shortcut dialog')
+        SizePersistedDialog.__init__(self, gui, 'AutomatedFanFicFare plugin:Keyboard shortcut dialog')
         self.gui = gui
         self.setWindowTitle(_('Keyboard shortcuts'))
         layout = QVBoxLayout(self)
@@ -390,7 +390,7 @@ class PrefsViewerDialog(SizePersistedDialog):
     def _edit_settings(self):
         from calibre.gui2.dialogs.confirm_delete import confirm
         message = '<p>' + _('Are you sure you want to edit settings in this library for this plugin?') + '</p>' \
-                  + '<p>' + _('The FanFicFare team does not support hand edited configurations.') + '</p>'
+                  + '<p>' + _('The AutomatedFanFicFare team does not support hand edited configurations.') + '</p>'
         if confirm(message, self.namespace+'_edit_settings', self):
             self.save_button.setEnabled(True)
             self.edit_button.setEnabled(False)
