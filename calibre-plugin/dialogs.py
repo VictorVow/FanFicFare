@@ -37,7 +37,7 @@ from calibre.gui2.dialogs.confirm_delete import confirm
 from calibre.gui2.complete2 import EditWithComplete
 from fanficfare.exceptions import NotGoingToDownload
 from fanficfare.ensure import ensure_text
-from calibre_plugins.fanficfare_plugin.fff_util import make_safe_ini
+from calibre_plugins.automatedfanficfare_plugin.fff_util import make_safe_ini
 
 # pulls in translation files for _() strings
 try:
@@ -45,7 +45,7 @@ try:
 except NameError:
     pass # load_translations() added in calibre 1.9
 
-from calibre_plugins.fanficfare_plugin.common_utils import (
+from calibre_plugins.automatedfanficfare_plugin.common_utils import (
     ReadOnlyTableWidgetItem, ReadOnlyTextIconWidgetItem,
     SizePersistedDialog, EditableTableWidgetItem,
     ImageTitleLayout, get_icon)
@@ -60,7 +60,7 @@ from fanficfare.configurable import (
 from .inihighlighter import IniHighlighter
 
 ## moved to prefs.py so they can be included in jobs.py.
-from calibre_plugins.fanficfare_plugin.prefs import (
+from calibre_plugins.automatedfanficfare_plugin.prefs import (
     SKIP,
     ADDNEW,
     UPDATE,
@@ -309,7 +309,7 @@ class AddNewDialog(HotKeyedSizePersistedDialog, INISnippetDialog):
         self.l = QVBoxLayout()
         self.setLayout(self.l)
 
-        self.setWindowTitle('FanFicFare')
+        self.setWindowTitle('AutomatedFanFicFare')
         self.setWindowIcon(icon)
 
         self.merge = self.newmerge = False
@@ -831,7 +831,7 @@ class _LoopProgressDialog(QProgressDialog):
         self.start_time = datetime.now()
 
         # can't import at file load.
-        from calibre_plugins.fanficfare_plugin.prefs import prefs
+        from calibre_plugins.automatedfanficfare_plugin.prefs import prefs
         self.show_est_time = prefs['show_est_time']
 
         self.setLabelText('%s %d / %d' % (self.status_prefix, self.i, len(self.book_list)))
@@ -1012,7 +1012,7 @@ class AboutDialog(QDialog):
         self.label = QLabel(text)
         self.label.setOpenExternalLinks(True)
         self.label.setWordWrap(True)
-        self.setWindowTitle(_('About FanFicFare'))
+        self.setWindowTitle(_('About AutomatedFanFicFare'))
         self.setWindowIcon(icon)
         self.l.addWidget(self.logo, 0, 0)
         self.l.addWidget(self.label, 0, 1)
@@ -1350,7 +1350,7 @@ class AutoUpdateDialog(SizePersistedDialog):
         # Suppress dialogs checkbox
         self.suppress_dialogs = QCheckBox(_('Suppress dialogs'), self)
         self.suppress_dialogs.setToolTip(
-            _('Skip the "FanFicFare download complete" confirmation dialog between cycles, enabling fully unattended operation.'))
+            _('Skip the "AutomatedFanFicFare download complete" confirmation dialog between cycles, enabling fully unattended operation.'))
         self.suppress_dialogs.setChecked(gprefs.get('fff:auto_update_suppress_dialogs', False))
         sched_layout.addWidget(self.suppress_dialogs)
 
@@ -1672,7 +1672,7 @@ class RejectListDialog(SizePersistedDialog):
 
         if show_delete:
             # can't import at file load.
-            from calibre_plugins.fanficfare_plugin.prefs import prefs
+            from calibre_plugins.automatedfanficfare_plugin.prefs import prefs
 
             self.deletebooks = QCheckBox(_('Delete Books (including books without FanFiction URLs)?'),self)
             self.deletebooks.setToolTip(_("Delete the selected books after adding them to the Rejected URLs list."))
