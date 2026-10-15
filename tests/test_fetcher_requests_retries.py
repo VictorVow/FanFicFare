@@ -88,6 +88,30 @@ class RequestsFetcherRetryTest(unittest.TestCase):
                 self.assertEqual(len(seen), 1)
                 sleep.assert_not_called()
 
+    def test_cloudflare_challenge_message(self):
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(403)
+                self.send_header('cf-mitigated', 'challenge')
+                self.end_headers()
+                self.wfile.write(b'Just a moment...')
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(('127.0.0.1', 0), Handler)
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(thread.join)
+        self.addCleanup(server.shutdown)
+
+        fetcher = self.make_fetcher()
+        with self.assertRaises(HTTPErrorFFF) as error:
+            fetcher.request('GET', 'http://127.0.0.1:%s/' % server.server_port)
+        self.assertEqual(error.exception.status_code, 403)
+        self.assertIn('Cloudflare challenge', error.exception.error_msg)
+
     def test_invalid_retry_counts_fall_back(self):
         for value in ('-1', 'invalid', '1.5', '', None):
             with self.subTest(value=value):
