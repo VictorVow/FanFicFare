@@ -133,6 +133,43 @@ class FanFictionNetSiteAdapter(BaseSiteAdapter):
                     raise
             j = j+1
 
+    @staticmethod
+    def _is_chapter_not_found(data):
+        ## ffnet's caching front end sometimes serves "Message Type 1"
+        ## pages for chapters that do exist.  Each URL form is cached
+        ## separately, so another form of the same URL may still work.
+        return "FanFiction.Net Message Type 1" in data and \
+            ("Chapter not found." in data or
+             "Story does not have any chapters" in data)
+
+    def _chapter_url_variants(self,url):
+        m = re.match(r"https?://(www|m)\.fanfiction\.net/s/(?P<id>\d+)(/(?P<chap>\d+))?",url)
+        if not m:
+            return [url]
+        storyurl = "https://%s/s/%s"%(self.getSiteDomain(),m.group('id'))
+        chap = m.group('chap') or '1'
+        variants = [url,
+                    "%s/%s/"%(storyurl,chap),
+                    "%s/%s"%(storyurl,chap)]
+        ## some stories only serve chapter 1 from the bare story URL.
+        if chap == '1':
+            variants.extend([storyurl+"/",storyurl])
+        return [ v for i, v in enumerate(variants) if v not in variants[:i] ]
+
+    def get_request_chapter_fallback(self,url):
+        ## try alternate URL forms of the same chapter when ffnet
+        ## claims it doesn't exist.  Idea from Shosetsu's ffnet
+        ## extension.
+        variants = self._chapter_url_variants(url)
+        for tryurl in variants:
+            data = self.get_request(tryurl)
+            if not self._is_chapter_not_found(data):
+                if tryurl != url:
+                    logger.info("Chapter not found at %s, used %s instead"%(url,tryurl))
+                return data
+            logger.debug("Chapter not found at %s"%tryurl)
+        return data
+
     def doExtractChapterUrlsAndMetadata(self,get_cover=True):
 
         # fetch the chapter.  From that we will get almost all the
@@ -141,7 +178,7 @@ class FanFictionNetSiteAdapter(BaseSiteAdapter):
         url = self.origurl
         logger.debug("URL: "+url)
 
-        data = self.get_request(url)
+        data = self.get_request_chapter_fallback(url)
         #logger.debug("\n===================\n%s\n===================\n"%data)
         soup = self.make_soup(data)
 
@@ -152,6 +189,9 @@ class FanFictionNetSiteAdapter(BaseSiteAdapter):
         # not found..." or "Story does not have any chapters"
         if "Please check to see you are not using an outdated url." in data:
             raise exceptions.FailedToDownload("Error downloading Chapter: %s!  'Chapter not found. Please check to see you are not using an outdated url.'" % url)
+
+        if "Story does not have any chapters" in data:
+            raise exceptions.FailedToDownload("Error downloading Chapter: %s!  'Story does not have any chapters.'" % url)
 
         if "Category for this story has been disabled" in data:
             raise exceptions.FailedToDownload("FanFiction.Net has removed the category for this story and will no longer serve it.")
@@ -413,7 +453,7 @@ class FanFictionNetSiteAdapter(BaseSiteAdapter):
 
         ## title URL was put back on chapter URL during
         ## normalize_chapterurl()
-        data = self.get_request(url)
+        data = self.get_request_chapter_fallback(url)
 
         if "Please email this error message in full to <a href='mailto:" in data:
             raise exceptions.FailedToDownload("Error downloading Chapter: %s!  FanFiction.net Site Error!" % url)

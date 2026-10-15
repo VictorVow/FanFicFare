@@ -157,10 +157,17 @@ class RequestsFetcher(Fetcher):
             ## not RequestsHTTPError(requests.exceptions.HTTPError) or
             ## urllib.error import HTTPError because we want code
             ## *and* content for that one trekfanfiction catch.
+            error_msg = e.args[0]
+            ## cf-mitigated:challenge is Cloudflare's documented way
+            ## to detect a challenge page, more reliable than 403/503.
+            if e.response.headers.get('cf-mitigated') == 'challenge':
+                error_msg = ("Cloudflare challenge blocked the request. "
+                             "Try use_flaresolverr_proxy or use_browser_cache. "
+                             "(%s)"%error_msg)
             raise exceptions.HTTPErrorFFF(
                 url,
                 e.response.status_code,
-                e.args[0],# error_msg
+                error_msg,
                 e.response.content # data
                 )
 
