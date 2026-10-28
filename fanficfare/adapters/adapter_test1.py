@@ -90,7 +90,7 @@ class TestSiteAdapter(BaseSiteAdapter):
             if self.has_config(sections,'chapter_urls'):
                 for l in self.get_config(sections,'chapter_urls').splitlines() :
                     if l:
-                        self.add_chapter(l[1+l.index(','):],l[:l.index(',')])
+                        self.add_chapter(l[1+l.index(','):],l[:l.index(',')],{'timestamp':datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
             else:
                 for (j,chap) in enumerate(self.get_config_list(sections,'chaptertitles'),start=1):
                     self.add_chapter(chap,self.url+"&chapter=%d"%j)
@@ -464,7 +464,7 @@ Lorem ipsum dolor sit amet, consectetur adipisicing elit, sed do eiusmod tempor 
         soup = self.make_soup(text)
         return self.utf8FromSoup(url,soup)
 
-    def get_urls_from_page(self,url,normalize):
+    def get_urls_from_page(self,url,normalize,geturls=None):
         logger.debug("Fake series "+self.getSiteDomain())
         '''
         This method is to make it easier for adapters to detect a

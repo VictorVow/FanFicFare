@@ -806,6 +806,7 @@ def LoopProgressDialog(gui,
     # reflect old behavior.
     if not ld.wasCanceled():
         finish_function(book_list)
+    return ld
 
 class _LoopProgressDialog(QProgressDialog):
     '''
@@ -875,7 +876,7 @@ class _LoopProgressDialog(QProgressDialog):
         try:
             ## collision spec passed into getadapter by partial from fff_plugin
             ## no retval only if it exists, but collision is SKIP
-            self.foreach_function(book)
+            self.foreach_function(book,quit_fn=self.wasCanceled)
 
         except NotGoingToDownload as d:
             book['status']=_('Skipped')
@@ -985,10 +986,10 @@ class _ModalDialog(QDialog):
 
     def do_it(self):
         try:
-            logger.debug("do_it 1")
+            # logger.debug("do_it 1")
             self.retval = self.do_function()
-            logger.debug("do_it 2")
-            logger.debug(self.retval)
+            # logger.debug("do_it 2")
+            # logger.debug(self.retval)
         finally:
             self.hide()
 

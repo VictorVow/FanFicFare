@@ -30,7 +30,7 @@ except NameError:
 from calibre.customize import InterfaceActionBase
 
 # pulled out from AutomatedFanFicFareBase for saving in prefs.py
-__version__ = (4, 62, 11)
+__version__ = (4, 62, 25)
 _PLUGIN_CA_BUNDLE = None
 
 def ensure_plugin_ca_bundle():
