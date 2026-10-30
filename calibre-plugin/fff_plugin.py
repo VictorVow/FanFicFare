@@ -21,7 +21,8 @@ from string import Template
 import traceback
 from collections import defaultdict
 
-from PyQt5.Qt import (QApplication, QMenu, QTimer, QToolButton, pyqtSignal, QEventLoop)
+from PyQt5.Qt import (QApplication, QMenu, QTimer, QToolButton, pyqtSignal, QEventLoop,
+                      QIcon, QPainter, QColor)
 
 from calibre.ptempfile import PersistentTemporaryFile, PersistentTemporaryDirectory, remove_dir
 from calibre.ebooks.metadata import MetaInformation
@@ -306,16 +307,12 @@ class AutomatedFanFicFarePlugin(InterfaceAction):
                 triggered=lambda checked: self.update_early())
             self.update_early_action.setVisible(self._auto_update_timer is not None)
 
-            self.stop_auto_start_action = self.create_menu_item_ex(
+            self.auto_start_toggle_action = self.create_menu_item_ex(
                 self.menu,
-                _('Auto-Start'),
-                image='plusplus.png',
+                '',  # text set by _update_auto_start_toggle()
                 unique_name='Auto-Start Auto-Update FanFiction Books',
-                is_checked=not gprefs.get('fff:auto_update_stop_auto_start', False),
-                triggered=lambda checked: self.toggle_stop_auto_start(checked))
-            self.stop_auto_start_action.setToolTip(
-                _('When checked, auto-update of the last used book selection is '
-                  'started automatically on calibre launch.'))
+                triggered=lambda checked: self.toggle_auto_start())
+            self._update_auto_start_toggle()
 
             self.same_selection_auto_update_action = self.create_menu_item_ex(
                 self.menu,
@@ -1415,9 +1412,40 @@ class AutomatedFanFicFarePlugin(InterfaceAction):
         self._auto_update_timer.stop()
         self._run_auto_update_cycle()
 
-    def toggle_stop_auto_start(self, checked):
-        '''Menu toggle: unchecking disables "same selection auto-update on launch".'''
-        gprefs['fff:auto_update_stop_auto_start'] = not checked
+    def toggle_auto_start(self):
+        '''Flip the "auto-start same selection on launch" setting.'''
+        gprefs['fff:auto_update_stop_auto_start'] = \
+            not gprefs.get('fff:auto_update_stop_auto_start', False)
+        self._update_auto_start_toggle()
+
+    def _update_auto_start_toggle(self):
+        '''Set the toggle item's text+icon: red "Disable" when auto-start is on,
+        green "Enable" when it's off.'''
+        enabled = not gprefs.get('fff:auto_update_stop_auto_start', False)
+        text  = _('Disable Auto-Start') if enabled else _('Enable Auto-Start')
+        image = 'minus.png'            if enabled else 'plusplus.png'
+        color = '#b00000'              if enabled else '#006000'
+        tip   = (_('Auto-Start is ON: auto-update of the last used book selection '
+                   'starts automatically on calibre launch.')
+                 if enabled else
+                 _('Auto-Start is OFF.'))
+        self.auto_start_toggle_action.setText(text)
+        self.auto_start_toggle_action.setToolTip(tip)
+        self.auto_start_toggle_action.setIcon(self._tinted_icon(image, color))
+
+    @staticmethod
+    def _tinted_icon(image_name, color_hex):
+        '''Recolor a monochrome theme icon by multiplying it with a color.'''
+        icon = get_icon(image_name)
+        pm = icon.pixmap(32, 32)
+        if pm.isNull():
+            return icon
+        tinted = pm.copy()
+        p = QPainter(tinted)
+        p.setCompositionMode(QPainter.CompositionMode_SourceIn)
+        p.fillRect(tinted.rect(), QColor(color_hex))
+        p.end()
+        return QIcon(tinted)
 
     def _auto_start_same_selection(self):
         '''Restart auto-update on launch using the same selection and the
