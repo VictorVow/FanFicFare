@@ -1382,6 +1382,7 @@ class AutomatedFanFicFarePlugin(InterfaceAction):
         auto_opts = self._auto_update_auto_opts or {}
         if not auto_opts.get('loop_forever', False):
             self._clear_auto_update_state()
+            self.rebuild_menus()
             return
 
         interval_ms = auto_opts.get('interval_ms', 0)
@@ -1494,6 +1495,9 @@ class AutomatedFanFicFarePlugin(InterfaceAction):
             # Use a sentinel timer so _auto_update_timer is not None (= auto-update active)
             self._auto_update_timer = QTimer(self.gui)
             self._run_auto_update_cycle()
+        # Reflect the running state in the menu immediately
+        # (Stop Auto-Update / Update Early appear, Same Selection hides).
+        self.rebuild_menus()
 
     def same_selection_auto_update(self):
         '''Start auto-update using the most recently used book selection.'''
@@ -1512,6 +1516,7 @@ class AutomatedFanFicFarePlugin(InterfaceAction):
             pass
         if self._auto_update_timer is not None:
             self._clear_auto_update_state()
+            self.rebuild_menus()
             self.do_status_message(_('Auto-Update stopped.'), 3000)
 
     def _clear_auto_update_state(self):
