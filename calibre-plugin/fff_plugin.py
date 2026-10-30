@@ -22,7 +22,7 @@ import traceback
 from collections import defaultdict
 
 from PyQt5.Qt import (QApplication, QMenu, QTimer, QToolButton, pyqtSignal, QEventLoop,
-                      QIcon, QPainter, QColor)
+                      QIcon)
 
 from calibre.ptempfile import PersistentTemporaryFile, PersistentTemporaryDirectory, remove_dir
 from calibre.ebooks.metadata import MetaInformation
@@ -307,13 +307,6 @@ class AutomatedFanFicFarePlugin(InterfaceAction):
                 triggered=lambda checked: self.update_early())
             self.update_early_action.setVisible(self._auto_update_timer is not None)
 
-            self.auto_start_toggle_action = self.create_menu_item_ex(
-                self.menu,
-                '',  # text set by _update_auto_start_toggle()
-                unique_name='Auto-Start Auto-Update FanFiction Books',
-                triggered=lambda checked: self.toggle_auto_start())
-            self._update_auto_start_toggle()
-
             self.same_selection_auto_update_action = self.create_menu_item_ex(
                 self.menu,
                 _('&Same Selection Auto-Update'),
@@ -322,6 +315,13 @@ class AutomatedFanFicFarePlugin(InterfaceAction):
                 triggered=lambda checked: self.same_selection_auto_update())
             self.same_selection_auto_update_action.setVisible(
                 self._auto_update_timer is None and self._auto_update_last_id_list is not None)
+
+            self.auto_start_toggle_action = self.create_menu_item_ex(
+                self.menu,
+                '',  # text set by _update_auto_start_toggle()
+                unique_name='Auto-Start Auto-Update FanFiction Books',
+                triggered=lambda checked: self.toggle_auto_start())
+            self._update_auto_start_toggle()
 
             self.get_list_imap_action = self.create_menu_item_ex(self.menu, _('Get Story URLs from &Email'), image='view.png',
                                                                  unique_name='Get Story URLs from IMAP',
@@ -1424,29 +1424,14 @@ class AutomatedFanFicFarePlugin(InterfaceAction):
         green "Enable" when it's off.'''
         enabled = not gprefs.get('fff:auto_update_stop_auto_start', False)
         text  = _('Disable Auto-Start') if enabled else _('Enable Auto-Start')
-        image = 'minus.png'            if enabled else 'plusplus.png'
-        color = '#b00000'              if enabled else '#006000'
+        image = 'dot_red.png'          if enabled else 'dot_green.png'
         tip   = (_('Auto-Start is ON: auto-update of the last used book selection '
                    'starts automatically on calibre launch.')
                  if enabled else
                  _('Auto-Start is OFF.'))
         self.auto_start_toggle_action.setText(text)
         self.auto_start_toggle_action.setToolTip(tip)
-        self.auto_start_toggle_action.setIcon(self._tinted_icon(image, color))
-
-    @staticmethod
-    def _tinted_icon(image_name, color_hex):
-        '''Recolor a monochrome theme icon by multiplying it with a color.'''
-        icon = get_icon(image_name)
-        pm = icon.pixmap(32, 32)
-        if pm.isNull():
-            return icon
-        tinted = pm.copy()
-        p = QPainter(tinted)
-        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
-        p.fillRect(tinted.rect(), QColor(color_hex))
-        p.end()
-        return QIcon(tinted)
+        self.auto_start_toggle_action.setIcon(get_icon(image))
 
     def _auto_start_same_selection(self):
         '''Restart auto-update on launch using the same selection and the
