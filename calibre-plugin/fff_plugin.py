@@ -201,6 +201,12 @@ class AutomatedFanFicFarePlugin(InterfaceAction):
         self.add_new_dialog = AddNewDialog(self.gui,
                                            prefs,
                                            self.qaction.icon())
+        # Auto-start the last auto-update on launch unless the user
+        # toggled "Stop Auto-Start".  Deferred a few seconds so the
+        # main window and library DB are fully up first.
+        if (not gprefs.get('fff:auto_update_stop_auto_start', False)
+                and self._auto_update_last_id_list):
+            QTimer.singleShot(10000, self._auto_start_same_selection)
 
     accepts_drops = True
 
@@ -299,6 +305,17 @@ class AutomatedFanFicFarePlugin(InterfaceAction):
                 unique_name='Update Early Auto-Update FanFiction Books',
                 triggered=lambda checked: self.update_early())
             self.update_early_action.setVisible(self._auto_update_timer is not None)
+
+            self.stop_auto_start_action = self.create_menu_item_ex(
+                self.menu,
+                _('Auto-Start'),
+                image='plusplus.png',
+                unique_name='Auto-Start Auto-Update FanFiction Books',
+                is_checked=not gprefs.get('fff:auto_update_stop_auto_start', False),
+                triggered=lambda checked: self.toggle_stop_auto_start(checked))
+            self.stop_auto_start_action.setToolTip(
+                _('When checked, auto-update of the last used book selection is '
+                  'started automatically on calibre launch.'))
 
             self.same_selection_auto_update_action = self.create_menu_item_ex(
                 self.menu,
@@ -1317,24 +1334,7 @@ class AutomatedFanFicFarePlugin(InterfaceAction):
         if not any(x['good'] for x in update_books):
             return
 
-        self._auto_update_last_id_list = id_list
-        gprefs['fff:auto_update_last_id_list'] = id_list
-        self._auto_update_id_list   = id_list
-        self._auto_update_options   = d.get_fff_options()
-        self._auto_update_auto_opts = d.get_auto_options()
-
-        delay_ms = self._auto_update_auto_opts['delay_ms']
-        if delay_ms > 0:
-            self._auto_update_timer = QTimer(self.gui)
-            self._auto_update_timer.setSingleShot(True)
-            self._auto_update_timer.timeout.connect(self._run_auto_update_cycle)
-            self._auto_update_timer.start(delay_ms)
-            self.do_status_message(
-                _('Auto-Update will begin in %d minute(s).') % max(1, delay_ms // 60000), 5000)
-        else:
-            # Use a sentinel timer so _auto_update_timer is not None (= auto-update active)
-            self._auto_update_timer = QTimer(self.gui)
-            self._run_auto_update_cycle()
+        self._start_auto_update(id_list, d.get_fff_options(), d.get_auto_options())
 
     def _run_auto_update_cycle(self):
         '''Re-fetch current library state and dispatch one update run.'''
@@ -1414,6 +1414,58 @@ class AutomatedFanFicFarePlugin(InterfaceAction):
             return
         self._auto_update_timer.stop()
         self._run_auto_update_cycle()
+
+    def toggle_stop_auto_start(self, checked):
+        '''Menu toggle: unchecking disables "same selection auto-update on launch".'''
+        gprefs['fff:auto_update_stop_auto_start'] = not checked
+
+    def _auto_start_same_selection(self):
+        '''Restart auto-update on launch using the same selection and the
+        settings saved from the last auto-update dialog.'''
+        if gprefs.get('fff:auto_update_stop_auto_start', False):
+            return
+        id_list = self._auto_update_last_id_list
+        fff_options = dict(gprefs.get('fff:auto_update_fff_options', None) or {})
+        if not id_list or not fff_options:
+            return
+        if not self.is_library_view():
+            self.do_status_message(_('Auto-Update: not in Library view, skipping auto-start.'), 5000)
+            return
+        if self._auto_update_timer is not None:
+            return
+        fff_options['collision'] = save_collisions.get(
+            fff_options.get('collision'), save_collisions[prefs['collision']])
+        auto_opts = {
+            'delay_ms':         (gprefs.get('fff:auto_update_delay_hours', 0) * 3600
+                                 + gprefs.get('fff:auto_update_delay_minutes', 5) * 60) * 1000,
+            'interval_ms':      (gprefs.get('fff:auto_update_interval_hours', 8) * 3600
+                                 + gprefs.get('fff:auto_update_interval_minutes', 0) * 60) * 1000,
+            'loop_forever':     gprefs.get('fff:auto_update_loop_forever', False),
+            'suppress_dialogs': gprefs.get('fff:auto_update_suppress_dialogs', False),
+        }
+        self._start_auto_update(id_list, fff_options, auto_opts)
+        self.do_status_message(_('Auto-Update restarted with the last used selection.'), 5000)
+
+    def _start_auto_update(self, id_list, fff_options, auto_opts):
+        '''Shared start logic used by the dialog accept path and auto-start.'''
+        self._auto_update_last_id_list = id_list
+        gprefs['fff:auto_update_last_id_list'] = id_list
+        self._auto_update_id_list   = id_list
+        self._auto_update_options   = fff_options
+        self._auto_update_auto_opts = auto_opts
+
+        delay_ms = auto_opts['delay_ms']
+        if delay_ms > 0:
+            self._auto_update_timer = QTimer(self.gui)
+            self._auto_update_timer.setSingleShot(True)
+            self._auto_update_timer.timeout.connect(self._run_auto_update_cycle)
+            self._auto_update_timer.start(delay_ms)
+            self.do_status_message(
+                _('Auto-Update will begin in %d minute(s).') % max(1, delay_ms // 60000), 5000)
+        else:
+            # Use a sentinel timer so _auto_update_timer is not None (= auto-update active)
+            self._auto_update_timer = QTimer(self.gui)
+            self._run_auto_update_cycle()
 
     def same_selection_auto_update(self):
         '''Start auto-update using the most recently used book selection.'''

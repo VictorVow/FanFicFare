@@ -1373,6 +1373,9 @@ class AutoUpdateDialog(SizePersistedDialog):
         gprefs['fff:auto_update_interval_minutes'] = self.interval_minutes.value()
         gprefs['fff:auto_update_loop_forever']     = self.loop_forever.isChecked()
         gprefs['fff:auto_update_suppress_dialogs'] = self.suppress_dialogs.isChecked()
+        gprefs['fff:auto_update_fff_options']      = self.get_fff_options()
+        gprefs['fff:auto_update_fff_options']['collision'] = save_collisions[
+            gprefs['fff:auto_update_fff_options']['collision']]
         SizePersistedDialog.accept(self)
 
     def click_show_download_options(self, x):
