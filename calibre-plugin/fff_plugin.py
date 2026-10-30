@@ -1442,7 +1442,7 @@ class AutomatedFanFicFarePlugin(InterfaceAction):
             return icon
         tinted = pm.copy()
         p = QPainter(tinted)
-        p.setCompositionMode(QPainter.CompositionMode_SourceIn)
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
         p.fillRect(tinted.rect(), QColor(color_hex))
         p.end()
         return QIcon(tinted)
