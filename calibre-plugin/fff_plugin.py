@@ -21,12 +21,13 @@ from string import Template
 import traceback
 from collections import defaultdict
 
-from PyQt5.Qt import (QApplication, QMenu, QTimer, QToolButton, pyqtSignal, QEventLoop)
+from PyQt5.Qt import (QApplication, QMenu, QTimer, QToolButton, pyqtSignal, QEventLoop,
+                      QIcon)
 
 from calibre.ptempfile import PersistentTemporaryFile, PersistentTemporaryDirectory, remove_dir
 from calibre.ebooks.metadata import MetaInformation
 from calibre.ebooks.metadata.meta import get_metadata as calibre_get_metadata
-from calibre.gui2 import error_dialog, info_dialog, question_dialog
+from calibre.gui2 import error_dialog, info_dialog, question_dialog, gprefs
 from calibre.gui2.dialogs.message_box import ViewLog
 from calibre.gui2.dialogs.confirm_delete import confirm
 from calibre.utils.config import prefs as calibre_prefs
@@ -91,12 +92,13 @@ from calibre_plugins.fanficfare_plugin.prefs import (
     SAVE_YES_UNLESS_IMG)
 
 from calibre_plugins.fanficfare_plugin.dialogs import (
-    AddNewDialog, UpdateExistingDialog,
+    AddNewDialog, UpdateExistingDialog, AutoUpdateDialog,
     LoopProgressDialog, UserPassDialog, AboutDialog, CollectURLDialog,
     RejectListDialog, EmailPassDialog, TOTPDialog,
     save_collisions, question_dialog_all,
     RejectUrlEntry, IniTextDialog,
-    EditTextDialog, ModalDialog)
+    EditTextDialog, ModalDialog, time_duration_format,
+    saved_auto_update_schedule, auto_update_options)
 
 # because calibre immediately transforms html into zip and don't want
 # to have an 'if html'.  db.has_format is cool with the case mismatch,
@@ -181,6 +183,14 @@ class FanFicFarePlugin(InterfaceAction):
         self.imap_pass = None
         self.download_job_manager = DownloadJobManager()
 
+        self._auto_update_state        = 'idle' # 'idle' | 'waiting' (timer pending) | 'running'
+        self._auto_update_timer        = None   # QTimer pending the next run, only while 'waiting'
+        self._auto_update_id_list      = None   # list[int] calibre book ids
+        self._auto_update_options      = None   # fff options dict
+        self._auto_update_auto_opts    = None   # {delay_ms, interval_ms, loop_forever, suppress_dialogs}
+        self._auto_update_last_summary = None  # plain-text result summary for suppress_dialogs mode
+        self._auto_update_htmllog      = None  # HTML log from last suppress_dialogs cycle
+
     def initialization_complete(self):
         # otherwise configured hot keys won't work until the menu's
         # been displayed once.
@@ -189,6 +199,8 @@ class FanFicFarePlugin(InterfaceAction):
         self.add_new_dialog = AddNewDialog(self.gui,
                                            prefs,
                                            self.qaction.icon())
+        # undo a Count Pages override left behind by a restart mid auto-update
+        self._restore_count_pages_ask_confirm()
 
     accepts_drops = True
 
@@ -241,6 +253,7 @@ class FanFicFarePlugin(InterfaceAction):
         self.set_popup_mode()
         rejecturllist.clear_cache()
         self.imap_pass = None
+        self.stop_auto_update()
 
     def rebuild_menus(self):
         with self.menus_lock:
@@ -263,6 +276,40 @@ class FanFicFarePlugin(InterfaceAction):
             self.update_action = self.create_menu_item_ex(self.menu, _('&Update Existing FanFiction Books'), image='plusplus.png',
                                                           unique_name='&Update Existing FanFiction Books',
                                                           triggered=self.update_dialog)
+
+            self.auto_update_action = self.create_menu_item_ex(
+                self.menu,
+                _('A&utomatically Update Existing FanFiction Books'),
+                image='plusplus.png',
+                unique_name='Automatically Update Existing FanFiction Books',
+                triggered=self.auto_update_dialog)
+            self.auto_update_action.setVisible(self._auto_update_state == 'idle')
+
+            self.stop_auto_update_action = self.create_menu_item_ex(
+                self.menu,
+                _('Stop &Auto-Update'),
+                image='minus.png',
+                unique_name='Stop Auto-Update FanFiction Books',
+                triggered=lambda checked: self.stop_auto_update())
+            self.stop_auto_update_action.setVisible(self._auto_update_state != 'idle')
+
+            self.update_early_action = self.create_menu_item_ex(
+                self.menu,
+                _('Update &Early'),
+                image='plusplus.png',
+                unique_name='Update Early Auto-Update FanFiction Books',
+                triggered=lambda checked: self.update_early())
+            # only while waiting for the next run, not during one
+            self.update_early_action.setVisible(self._auto_update_state == 'waiting')
+
+            self.same_selection_auto_update_action = self.create_menu_item_ex(
+                self.menu,
+                _('&Same Selection Auto-Update'),
+                image='plusplus.png',
+                unique_name='Same Selection Auto-Update FanFiction Books',
+                triggered=lambda checked: self.same_selection_auto_update())
+            self.same_selection_auto_update_action.setVisible(
+                self._auto_update_state == 'idle' and self._last_id_list() is not None)
 
             self.get_list_imap_action = self.create_menu_item_ex(self.menu, _('Get Story URLs from &Email'), image='view.png',
                                                                  unique_name='Get Story URLs from IMAP',
@@ -1133,7 +1180,7 @@ class FanFicFarePlugin(InterfaceAction):
     def prep_anthology_downloads(self, options, update_books,
                                  merge=False, urlmapfile=None):
         # new question_cache each time we start prep'ing downloads.
-        self.question_cache = {}
+        self._reset_question_cache()
         if isinstance(update_books, str):
             url_list = split_text_to_urls(update_books)
             update_books = self.convert_urls_to_books(url_list)
@@ -1222,6 +1269,248 @@ class FanFicFarePlugin(InterfaceAction):
             options = d.get_fff_options()
             self.prep_downloads( options, update_books )
 
+    ## ----------------------------------------------------------------
+    ## Auto-Update methods
+    ## ----------------------------------------------------------------
+
+    def auto_update_dialog(self, checked, id_list=None, extraoptions={}):
+        if not self.is_library_view():
+            self.do_status_message(_('Cannot Auto-Update Books from Device View'), 3000)
+            return
+
+        if self._auto_update_state != 'idle':
+            self.do_status_message(_('Auto-Update is already running. Use "Stop Auto-Update" to cancel it first.'), 5000)
+            return
+
+        if not id_list:
+            id_list = self.gui.library_view.get_selected_ids()
+
+        if len(id_list) == 0:
+            self.do_status_message(_('No Selected Books to Auto-Update'), 3000)
+            return
+
+        self.check_valid_collision(extraoptions)
+
+        books = [self.make_book_id_only(x) for x in id_list]
+        for j, book in enumerate(books):
+            book['listorder'] = j
+
+        LoopProgressDialog(self.gui,
+                           books,
+                           partial(self.populate_book_from_calibre_id, db=self.gui.current_db),
+                           partial(self.auto_update_dialog_finish, id_list=id_list, extraoptions=extraoptions),
+                           init_label=_("Collecting stories for auto-update..."),
+                           win_title=_("Get stories for auto-update"),
+                           status_prefix=_("URL retrieved"))
+
+    def auto_update_dialog_finish(self, book_list, id_list=None, extraoptions={}):
+        '''Open AutoUpdateDialog, collect options, then kick off the first run.'''
+        d = AutoUpdateDialog(self.gui,
+                             _('Automatically Update Existing List'),
+                             prefs,
+                             self.qaction.icon(),
+                             book_list,
+                             extraoptions=extraoptions)
+        d.exec_()
+        if d.result() != d.Accepted:
+            return
+
+        update_books = d.get_books()
+        if not any(x['good'] for x in update_books):
+            return
+
+        # books left in the dialog, not the original selection
+        id_list = [b['calibre_id'] for b in update_books]
+        self._start_auto_update(id_list, d.get_fff_options(), d.get_auto_options())
+
+    def _run_auto_update_cycle(self):
+        '''Re-fetch current library state and dispatch one update run.'''
+        self._cancel_auto_update_timer()
+        self._auto_update_state = 'running'
+        if not self.is_library_view():
+            self.stop_auto_update()
+            return
+
+        self._auto_update_last_summary = None  # reset before each cycle
+        # Clear state that must not persist across cycles:
+        # - basic_cache: stale HTTP responses would mask newly-added chapters
+        # - uniqueurls: accumulated set would falsely skip all books in cycle 2+
+        # - tdir: the temp directory is deleted at end of each cycle by
+        #   update_books_finish; keeping the stale path causes prep_downloads
+        #   to skip tdir creation, so old-epub temp files fail with ENOENT
+        self._auto_update_options.pop('basic_cache', None)
+        self._auto_update_options.pop('uniqueurls', None)
+        self._auto_update_options.pop('tdir', None)
+        id_list = self._auto_update_id_list
+        books = [self.make_book_id_only(x) for x in id_list]
+        for j, book in enumerate(books):
+            book['listorder'] = j
+
+        # do_proceed_question ends the run only for downloads carrying this
+        # marker, so manual downloads finishing mid-run don't end it early
+        self._auto_update_options['auto_update_run'] = True
+        self.rebuild_menus()  # hide Update Early while running
+
+        ld = LoopProgressDialog(self.gui,
+                           books,
+                           partial(self.populate_book_from_calibre_id, db=self.gui.current_db),
+                           self._run_auto_update_prep_done,
+                           init_label=_("Collecting stories for auto-update cycle..."),
+                           win_title=_("Auto-Update: collecting stories"),
+                           status_prefix=_("URL retrieved"))
+        if ld.wasCanceled():
+            self.stop_auto_update()
+
+    def _run_auto_update_prep_done(self, book_list):
+        '''Called when LoopProgressDialog finishes collecting metadata.'''
+        if not any(x['good'] for x in book_list):
+            self._on_auto_update_done()
+            return
+        ld = self.prep_downloads(self._auto_update_options, book_list)
+        if ld is not None and ld.wasCanceled():
+            self.stop_auto_update()
+
+    def _on_auto_update_done(self):
+        '''Called once at the end of each auto-update run; schedules the next one.'''
+        # guard against a second completion report for the same run
+        if self._auto_update_state != 'running':
+            return
+
+        auto_opts = self._auto_update_auto_opts or {}
+        if not auto_opts.get('loop_forever', False):
+            self._clear_auto_update_state()
+            self.rebuild_menus()
+            return
+
+        interval_ms = auto_opts.get('interval_ms', 0)
+        htmllog = self._auto_update_htmllog
+        if interval_ms > 0:
+            self._schedule_auto_update_run(interval_ms)
+            summary = self._auto_update_last_summary
+            next_cycle_msg = _('Auto-Update: next cycle in %s.') % time_duration_format(interval_ms // 1000, joiner=' and ')
+            msg = ('Update finished: %s — %s' % (summary, next_cycle_msg)) if summary else next_cycle_msg
+            self.do_status_message(msg, 8000)
+        else:
+            if self._auto_update_last_summary:
+                self.do_status_message(_('Update finished: %s') % self._auto_update_last_summary, 5000)
+            self._run_auto_update_cycle()
+        if htmllog:
+            d = ViewLog(_('FanFicFare log'), htmllog, parent=self.gui)
+            d.setWindowIcon(get_icon('bookmarks.png'))
+            d.show()
+
+    def update_early(self):
+        '''Cancel the pending timer and run the auto-update cycle immediately.
+        Rescheduling after the cycle follows the normal _on_auto_update_done() logic.'''
+        if self._auto_update_state != 'waiting':
+            return
+        self._run_auto_update_cycle()
+
+    def _schedule_auto_update_run(self, delay_ms):
+        '''Enter 'waiting': run the next cycle after delay_ms.'''
+        self._cancel_auto_update_timer()
+        self._auto_update_timer = QTimer(self.gui)
+        self._auto_update_timer.setSingleShot(True)
+        self._auto_update_timer.timeout.connect(self._run_auto_update_cycle)
+        self._auto_update_timer.start(delay_ms)
+        self._auto_update_state = 'waiting'
+        self.rebuild_menus()  # show Update Early while waiting
+
+    def _cancel_auto_update_timer(self):
+        if self._auto_update_timer is not None:
+            self._auto_update_timer.stop()
+            self._auto_update_timer = None
+
+    def _last_id_list(self):
+        '''Last auto-update selection for the current library, or None.'''
+        saved = gprefs.get('fff:auto_update_last_id_list', None)
+        if isinstance(saved, dict):
+            return saved.get(self.gui.current_db.library_id) or None
+        # pre-per-library value: a plain list, taken to belong to the current library
+        return saved or None
+
+    def _save_last_id_list(self, id_list):
+        saved = gprefs.get('fff:auto_update_last_id_list', None)
+        saved = dict(saved) if isinstance(saved, dict) else {}
+        saved[self.gui.current_db.library_id] = id_list
+        gprefs['fff:auto_update_last_id_list'] = saved
+
+    def _start_same_selection_saved(self):
+        '''Start auto-update on the last selection with the saved dialog
+        settings, no confirmation. Returns True if started.'''
+        id_list = self._last_id_list()
+        fff_options = dict(gprefs.get('fff:auto_update_fff_options', None) or {})
+        if not id_list or not fff_options:
+            return False
+        if not self.is_library_view():
+            self.do_status_message(_('Cannot Auto-Update Books from Device View'), 5000)
+            return False
+        if self._auto_update_state != 'idle':
+            return False
+        fff_options['collision'] = save_collisions.get(
+            fff_options.get('collision'), save_collisions[prefs['collision']])
+        self._start_auto_update(id_list, fff_options,
+                                auto_update_options(saved_auto_update_schedule()))
+        return True
+
+    def _start_auto_update(self, id_list, fff_options, auto_opts):
+        '''Shared start logic used by the dialog accept path and Same Selection Auto-Update.'''
+        self._save_last_id_list(id_list)
+        self._auto_update_id_list   = id_list
+        self._auto_update_options   = fff_options
+        self._auto_update_auto_opts = auto_opts
+
+        delay_ms = auto_opts['delay_ms']
+        if delay_ms > 0:
+            self._schedule_auto_update_run(delay_ms)
+            self.do_status_message(
+                _('Auto-Update will begin in %d minute(s).') % max(1, delay_ms // 60000), 5000)
+        else:
+            self._run_auto_update_cycle()
+
+    def same_selection_auto_update(self):
+        '''Start auto-update using the most recently used book selection.'''
+        id_list = self._last_id_list()
+        if id_list is None:
+            self.do_status_message(_('No previous selection available.'), 3000)
+            return
+        if self._start_same_selection_saved():
+            self.do_status_message(_('Auto-Update started with the last used selection.'), 5000)
+        elif not gprefs.get('fff:auto_update_fff_options', None):
+            # No saved settings yet: ask once via the dialog.
+            self.auto_update_dialog(None, id_list=id_list)
+
+    def stop_auto_update(self):
+        '''Cancel any pending or running auto-update and clean up state.'''
+        if self._auto_update_state == 'idle':
+            return
+        self._clear_auto_update_state()
+        self.rebuild_menus()
+        self.do_status_message(_('Auto-Update stopped.'), 3000)
+
+    def _clear_auto_update_state(self):
+        self._cancel_auto_update_timer()
+        self._auto_update_state        = 'idle'
+        self._auto_update_id_list      = None
+        self._auto_update_options      = None
+        self._auto_update_auto_opts    = None
+        self._auto_update_last_summary = None
+        self._auto_update_htmllog      = None
+        self._restore_count_pages_ask_confirm()
+
+    def _restore_count_pages_ask_confirm(self):
+        orig = gprefs.get('fff:count_pages_original_ask_confirm')
+        if orig is None:
+            return
+        try:
+            import calibre_plugins.count_pages.config as cp_cfg
+            cp_cfg.plugin_prefs[cp_cfg.STORE_NAME][cp_cfg.KEY_ASK_FOR_CONFIRMATION] = orig
+        except Exception:
+            pass
+        gprefs['fff:count_pages_original_ask_confirm'] = None
+
+    ## ----------------------------------------------------------------
+
     def get_urls_clip(self,storyurls=True):
         url_list = []
         if prefs['urlsfromclip']:
@@ -1244,10 +1533,17 @@ class FanFicFarePlugin(InterfaceAction):
         # logger.debug(retval)
         return retval
 
+    def _reset_question_cache(self, options=None):
+        self.question_cache = {}
+        if self._suppressing_dialogs(options):
+            # Suppressed auto-update runs should behave like a silent "Yes to All"
+            # for adult confirmation prompts.
+            self.question_cache['is_adult'] = True
+
     def prep_downloads(self, options, books, merge=False, extrapayload=None):
         '''Fetch metadata for stories from servers, launch BG job when done.'''
         # new question_cache each time we start prep'ing downloads.
-        self.question_cache = {}
+        self._reset_question_cache(options)
         if isinstance(books, str):
             url_list = split_text_to_urls(books)
             books = self.convert_urls_to_books(url_list)
@@ -1282,7 +1578,7 @@ class FanFicFarePlugin(InterfaceAction):
                 status_prefix=_("Fetched metadata for")
 
             self.do_status_message(status_bar, 3000)
-            LoopProgressDialog(self.gui,
+            return LoopProgressDialog(self.gui,
                                books,
                                partial(self.prep_download_loop, options = options, merge=merge),
                                partial(self.start_download_job, options = options, merge=merge),
@@ -1968,10 +2264,14 @@ class FanFicFarePlugin(InterfaceAction):
         job.orig_book_list = book_list
         # set as part of job, otherwise *changing* reconsolidate_jobs
         # after launch could cause job results to be ignored.
-        job.reconsolidate=prefs['reconsolidate_jobs']  # YYY batch update
+        # auto-update runs always reconsolidate so a run finishes exactly once
+        job.reconsolidate=prefs['reconsolidate_jobs'] or bool(options.get('auto_update_run'))  # YYY batch update
 
         self.gui.jobs_pointer.start()
-        self.do_status_message(_('Starting %d FanFicFare Downloads')%len(book_list),3000)
+        if site:
+            self.do_status_message(_('Starting %d downloads from %s') % (len(book_list), site), 3000)
+        else:
+            self.do_status_message(_('Starting %d downloads') % len(book_list), 3000)
 
     def do_mark_series_anthologies(self,mark_anthology_ids):
         if prefs['mark_series_anthologies'] and mark_anthology_ids:
@@ -2133,6 +2433,22 @@ class FanFicFarePlugin(InterfaceAction):
             # print("all_ids:%s"%all_ids)
             # print("countpagesstats:%s"%countpagesstats)
 
+            ## In suppress_dialogs mode disable Count Pages' "Ask for confirmation"
+            ## dialog so unattended updates run without blocking.  The original value
+            ## is restored when the auto-update session ends (_clear_auto_update_state).
+            if self._suppressing_dialogs(options):
+                try:
+                    import calibre_plugins.count_pages.config as cp_cfg
+                    orig = cp_cfg.plugin_prefs[cp_cfg.STORE_NAME].get(
+                               cp_cfg.KEY_ASK_FOR_CONFIRMATION, False)
+                    if orig:
+                        # persisted so a restart mid-loop still restores it
+                        if gprefs.get('fff:count_pages_original_ask_confirm') is None:
+                            gprefs['fff:count_pages_original_ask_confirm'] = orig
+                        cp_cfg.plugin_prefs[cp_cfg.STORE_NAME][cp_cfg.KEY_ASK_FOR_CONFIRMATION] = False
+                except Exception:
+                    pass
+
             ## If only some of the books need word counting, they'll
             ## have to be launched separately.
             if prefs['wordcountmissing'] and 'WordCount' in countpagesstats:
@@ -2177,7 +2493,11 @@ class FanFicFarePlugin(InterfaceAction):
                     x['reportorder'] = x['listorder']+10000000 # force to end.
                     x['comment'] = _('Background Job Failed, see Calibre Jobs log.')
                     x['showerror'] = True
-            self.gui.job_exception(job, dialog_title=_('Background Job Failed to Download Stories for (%s)')%job.site)
+            if self._suppressing_dialogs(options):
+                # failures are reported in the run summary instead
+                logger.error("Background job failed for %s:\n%s" % (job.site, job.details))
+            else:
+                self.gui.job_exception(job, dialog_title=_('Background Job Failed to Download Stories for (%s)')%job.site)
             job.result = failedjobresult
 
         if job.reconsolidate: # YYY batch update
@@ -2190,6 +2510,7 @@ class FanFicFarePlugin(InterfaceAction):
         if job.reconsolidate: # YYY batch update
             if batch.all_done():
                 book_list = batch.get_results()
+                self.download_job_manager.remove_batch(tdir)
             else:
                 return
         else:
@@ -2215,7 +2536,8 @@ class FanFicFarePlugin(InterfaceAction):
         msgl = [ _('FanFicFare found <b>%s</b> good and <b>%s</b> bad updates.')%(len(good_list),len(bad_list)) ]
         if chapter_error_list:
             message = _('Some of the stories downloaded have chapters errors.  Click View Log in the next dialog to see which.')
-            confirm(message,'fff_chapter_errors', self.gui, show_cancel_button=False, title=_("Warning"))
+            if not self._suppressing_dialogs(options):
+                confirm(message,'fff_chapter_errors', self.gui, show_cancel_button=False, title=_("Warning"))
             msgl.append(_('<b>%s</b> good stories contain chapter errors.')%len(chapter_error_list))
         if merge:
             if len(good_list) < 1:
@@ -2281,13 +2603,60 @@ class FanFicFarePlugin(InterfaceAction):
             ## but they also don't need the processEvents() call
             pass
 
+    @staticmethod
+    def _payload_options(payload):
+        if isinstance(payload, tuple) and len(payload) >= 3 and isinstance(payload[2], dict):
+            return payload[2]
+        return None
+
+    def _auto_update_run_finished(self, payload):
+        '''End the auto-update run if this download belongs to one.'''
+        if (self._payload_options(payload) or {}).get('auto_update_run'):
+            self._on_auto_update_done()
+
+    def _suppressing_dialogs(self, options):
+        '''True only for downloads belonging to an auto-update run with Suppress dialogs on,
+        so downloads started by hand keep their dialogs.'''
+        return bool((options or {}).get('auto_update_run')) and \
+            (self._auto_update_auto_opts or {}).get('suppress_dialogs', False)
+
     def do_proceed_question(self, update_func, payload, htmllog, msgl):
+        if self._suppressing_dialogs(self._payload_options(payload)):
+            update_func(payload)
+            self._auto_update_htmllog = htmllog
+            # Build a plain-text result summary from good_list / bad_list
+            if isinstance(payload, tuple) and len(payload) >= 2:
+                from collections import Counter
+                status_display = {
+                    _('Add'):      _('Added'),
+                    _('Update'):   _('Updated'),
+                    _('Meta'):     _('Metadata updates'),
+                    _('Rejected'): _('User Rejected'),
+                }
+                def _display(s):
+                    return status_display.get(s, s)
+                good_list, bad_list = payload[0], payload[1]
+                parts = []
+                if good_list:
+                    counts = Counter(_display(b.get('status','')) for b in good_list)
+                    detail = ', '.join('%d %s' % (n, s) for s, n in sorted(counts.items()))
+                    parts.append(_('%d updated (%s)') % (len(good_list), detail))
+                if bad_list:
+                    counts = Counter(_display(b.get('status','')) for b in bad_list)
+                    detail = ', '.join('%d %s' % (n, s) for s, n in sorted(counts.items()))
+                    parts.append(_('%d failed (%s)') % (len(bad_list), detail))
+                self._auto_update_last_summary = '; '.join(parts) if parts else _('No changes')
+            self.download_finished_signal.emit()
+            self._auto_update_run_finished(payload)
+            return
+
         msg = '<p>'+'</p>\n<p>'.join(msgl)+ '</p>\n'
         def proceed_func(*args, **kwargs):
             update_func(*args, **kwargs)
             # logger.debug("Call self.download_finished_signal.emit()")
             ## for Action Chains
             self.download_finished_signal.emit()
+            self._auto_update_run_finished(payload)
 
         self.gui.proceed_question(proceed_func,
                                   payload, htmllog,
