@@ -201,6 +201,11 @@ class FanFicFarePlugin(InterfaceAction):
                                            self.qaction.icon())
         # undo a Count Pages override left behind by a restart mid auto-update
         self._restore_count_pages_ask_confirm()
+        # Auto-start the last auto-update on launch unless the user
+        # disabled Auto-Start.  Deferred a few seconds so the
+        # main window and library DB are fully up first.
+        if self._auto_start_enabled() and self._last_id_list():
+            QTimer.singleShot(10000, self._auto_start_same_selection)
 
     accepts_drops = True
 
@@ -310,6 +315,13 @@ class FanFicFarePlugin(InterfaceAction):
                 triggered=lambda checked: self.same_selection_auto_update())
             self.same_selection_auto_update_action.setVisible(
                 self._auto_update_state == 'idle' and self._last_id_list() is not None)
+
+            self.auto_start_toggle_action = self.create_menu_item_ex(
+                self.menu,
+                '',  # text set by _update_auto_start_toggle()
+                unique_name='Auto-Start Auto-Update FanFiction Books',
+                triggered=lambda checked: self.toggle_auto_start())
+            self._update_auto_start_toggle()
 
             self.get_list_imap_action = self.create_menu_item_ex(self.menu, _('Get Story URLs from &Email'), image='view.png',
                                                                  unique_name='Get Story URLs from IMAP',
@@ -1435,6 +1447,49 @@ class FanFicFarePlugin(InterfaceAction):
         saved[self.gui.current_db.library_id] = id_list
         gprefs['fff:auto_update_last_id_list'] = saved
 
+    def _auto_start_enabled(self):
+        if 'fff:auto_update_auto_start' not in gprefs:
+            # one-time migration from the old inverted pref
+            gprefs['fff:auto_update_auto_start'] = \
+                not gprefs.get('fff:auto_update_stop_auto_start', False)
+            if 'fff:auto_update_stop_auto_start' in gprefs:
+                del gprefs['fff:auto_update_stop_auto_start']
+        return gprefs['fff:auto_update_auto_start']
+
+    def toggle_auto_start(self):
+        '''Flip the "auto-start same selection on launch" setting.'''
+        gprefs['fff:auto_update_auto_start'] = not self._auto_start_enabled()
+        self._update_auto_start_toggle()
+
+    def _update_auto_start_toggle(self):
+        '''Set the toggle item's text+icon: red "Disable" when auto-start is on,
+        green "Enable" when it's off.'''
+        enabled = self._auto_start_enabled()
+        text  = _('Disable Auto-Start') if enabled else _('Enable Auto-Start')
+        image = 'dot_red.png'          if enabled else 'dot_green.png'
+        tip   = (_('Auto-Start is ON: auto-update of the last used book selection '
+                   'starts automatically on calibre launch.')
+                 if enabled else
+                 _('Auto-Start is OFF.'))
+        self.auto_start_toggle_action.setText(text)
+        self.auto_start_toggle_action.setToolTip(tip)
+        self.auto_start_toggle_action.setIcon(get_icon(image))
+
+    def _auto_start_same_selection(self, first_try=True):
+        '''Restart auto-update on launch using the same selection and the
+        settings saved from the last auto-update dialog.'''
+        if not self._auto_start_enabled() or self._auto_update_state != 'idle':
+            return
+        if not self.is_library_view():
+            if first_try:
+                self.do_status_message(
+                    _('Auto-Start: will start when you return to the Library view.'), 5000)
+            # keep retrying instead of giving up until the next launch
+            QTimer.singleShot(60000, lambda: self._auto_start_same_selection(first_try=False))
+            return
+        if self._start_same_selection_saved():
+            self.do_status_message(_('Auto-Update restarted with the last used selection.'), 5000)
+
     def _start_same_selection_saved(self):
         '''Start auto-update on the last selection with the saved dialog
         settings, no confirmation. Returns True if started.'''
@@ -1454,7 +1509,7 @@ class FanFicFarePlugin(InterfaceAction):
         return True
 
     def _start_auto_update(self, id_list, fff_options, auto_opts):
-        '''Shared start logic used by the dialog accept path and Same Selection Auto-Update.'''
+        '''Shared start logic used by the dialog accept path and auto-start.'''
         self._save_last_id_list(id_list)
         self._auto_update_id_list   = id_list
         self._auto_update_options   = fff_options
